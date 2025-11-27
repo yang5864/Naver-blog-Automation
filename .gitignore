@@ -8,11 +8,13 @@ dist/
 # --- [민감한 정보 및 데이터 폴더] ---
 # 크롬 자동화 로그인 정보가 저장되는 폴더들
 ChromeBotData/
+ChromeTemp/
 UserData/
 profile/
 storage/
+state.json
 
-# --- [파이썬 자동 생성 파일 (업로드 불필요)] ---
+# --- [파이썬 자동 생성 파일] ---
 __pycache__/
 *.py[cod]
 *$py.class
@@ -22,7 +24,6 @@ __pycache__/
 wine.log
 
 # --- [에디터/IDE 임시 파일] ---
-# VS Code Runner 임시 파일 (사진에 보임)
 tempCodeRunnerFile.py
 .vscode/
 .idea/
