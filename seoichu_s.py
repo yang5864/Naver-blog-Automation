@@ -6,7 +6,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import TimeoutException, NoSuchWindowException
 
 # ==========================================
 # [사용자 설정]
@@ -16,6 +16,7 @@ APPLY_MESSAGE = "블로그 스타일이 너무 좋아요! 저도 다양한 주�
 # ==========================================
 
 def connect_debugger_driver():
+    """실행 중인 크롬에 연결"""
     chrome_options = Options()
     chrome_options.add_experimental_option("debuggerAddress", "127.0.0.1:9222")
     chrome_options.page_load_strategy = 'eager' 
@@ -24,15 +25,18 @@ def connect_debugger_driver():
     except:
         return None
 
-def extract_blog_ids(driver):
+def collect_ids_from_current_page(driver):
+    """현재 페이지(검색결과)에서 ID만 추출하여 리스트로 반환"""
     ids = set()
     try:
+        # 검색결과 탭인지 확인을 위해 짧게 대기
         driver.implicitly_wait(0.5)
         links = driver.find_elements(By.TAG_NAME, "a")
         for link in links:
             try:
                 url = link.get_attribute("href")
                 if url and "blog.naver.com" in url:
+                    # blog.naver.com/아이디 형식 추출
                     match = re.search(r'blog\.naver\.com\/([a-zA-Z0-9_-]+)', url)
                     if match:
                         b_id = match.group(1)
@@ -43,18 +47,22 @@ def extract_blog_ids(driver):
         driver.implicitly_wait(5)
     return list(ids)
 
-def prepare_enough_ids(driver, target_need, collected_ids):
-    retry_scroll = 0
-    while True:
-        current_ids = extract_blog_ids(driver)
-        new_ids_count = len([i for i in current_ids if i not in collected_ids])
-        print(f"   >>> 현재 로딩된 ID {len(current_ids)}개 (신규: {new_ids_count}개)")
-        if new_ids_count >= 30: return current_ids
+def perform_scroll_and_load(driver):
+    """메인 탭에서 스크롤을 내려 새로운 내용을 로딩"""
+    try:
+        prev_height = driver.execute_script("return document.body.scrollHeight")
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(1.5)
-        retry_scroll += 1
-        if retry_scroll > 10: return current_ids
+        time.sleep(1.5) # 로딩 대기
+        curr_height = driver.execute_script("return document.body.scrollHeight")
+        
+        # 스크롤이 더 이상 내려가지 않으면 False 반환
+        return curr_height > prev_height
+    except:
+        return False
 
+# =========================================================
+# 서이추 로직 (새 탭 내부에서 동작)
+# =========================================================
 def check_alert(driver):
     try:
         WebDriverWait(driver, 0.3).until(EC.alert_is_present())
@@ -94,7 +102,7 @@ def check_layer_popup_loading(driver):
     except: return False
 
 def click_neighbor_button_recursive(driver):
-    """텍스트 기반 버튼 탐색 및 클릭"""
+    """이웃추가 버튼을 재귀적으로 찾아 클릭"""
     try:
         xpath = "//*[contains(text(), '이웃추가')]"
         elements = driver.find_elements(By.XPATH, xpath)
@@ -116,47 +124,36 @@ def click_neighbor_button_recursive(driver):
     except: return False
     return False
 
-def process_neighbor_natural(driver, blog_id):
+def process_logic_in_tab(driver, blog_id):
+    """
+    이미 새 탭이 열려있고, 해당 탭으로 포커스가 맞춰진 상태에서 실행되는 로직
+    """
     try:
-        driver.execute_script("window.open('');")
-        driver.switch_to.window(driver.window_handles[-1])
-        
-        # 1. [정석] 프로필 페이지로 먼저 이동
-        driver.get(f"https://m.blog.naver.com/{blog_id}")
-        time.sleep(1.0) # 로딩 대기
-
-        # 2. [차단 감지] 일시적인 오류 페이지인지 확인
+        # [차단 감지] 일시적인 오류 페이지 확인
         if "MobileErrorView" in driver.current_url or "일시적인 오류" in driver.page_source:
             return "BLOCK_DETECTED", "차단 감지(일시적 오류)"
 
-        # 3. 이미 이웃인지 확인
+        # 이미 이웃인지 확인
         src = driver.page_source
         if "이웃끊기" in src or ">이웃<" in src or "서로이웃<" in src:
             return False, "스킵(이미 이웃)"
 
-        # 4. 이웃추가 버튼 클릭 (URL 이동 X -> 클릭 O)
+        # 이웃추가 버튼 클릭
         clicked = False
-        
-        # 4-1. data-click-area 우선 시도
         try:
             btn = driver.find_element(By.CSS_SELECTOR, "[data-click-area*='add']")
             driver.execute_script("arguments[0].click();", btn)
             clicked = True
         except:
-            # 4-2. 텍스트 재귀 탐색
             if click_neighbor_button_recursive(driver):
                 clicked = True
 
-        if not clicked:
-            return False, "스킵(버튼 못찾음)"
+        if not clicked: return False, "스킵(버튼 못찾음)"
 
-        # --------------------------------------------------------
-        # 클릭 후 페이지 전환 대기 및 팝업 체크
-        # --------------------------------------------------------
         time.sleep(0.5)
         
+        # 팝업 체크
         if check_layer_popup_loading(driver): return False, "스킵(서이추 신청 진행중)"
-        
         alert_msg = check_alert(driver)
         if alert_msg:
             if "신청" in alert_msg: return False, "스킵(신청중)"
@@ -164,13 +161,9 @@ def process_neighbor_natural(driver, blog_id):
             if "하루" in alert_msg or "100명" in alert_msg: return "DONE_DAY", "완료(한도달성)"
             return False, f"스킵({alert_msg})"
 
-        # --------------------------------------------------------
-        # 5. 신청 페이지 로직 (JS 원샷)
-        # --------------------------------------------------------
+        # 신청 페이지 로직 (Javascript)
         try:
-            # 2초 기다림 (페이지 전환)
             WebDriverWait(driver, 2.0).until(EC.presence_of_element_located((By.ID, "bothBuddyRadio")))
-            
             js_result = driver.execute_script("""
                 try {
                     var radio = document.getElementById('bothBuddyRadio');
@@ -186,28 +179,18 @@ def process_neighbor_natural(driver, blog_id):
                     return 'SUCCESS';
                 } catch(e) { return 'JS_ERROR'; }
             """)
-            
             if js_result == 'BLOCKED': return False, "스킵(서로이웃 막힘)"
             if js_result == 'NOT_FOUND': return False, "스킵(로딩 실패/옵션 없음)"
 
         except TimeoutException:
-            # 클릭했는데 안 넘어갔으면 -> 여기서만 구조대(URL이동) 사용 (최후의 수단)
+            # 타임아웃 시 URL 강제 이동 시도
             driver.get(f"https://m.blog.naver.com/BuddyAddForm.naver?blogId={blog_id}")
-            try:
-                WebDriverWait(driver, 2.0).until(EC.presence_of_element_located((By.ID, "bothBuddyRadio")))
-            except:
-                return False, "스킵(로딩 Timeout)"
+            try: WebDriverWait(driver, 2.0).until(EC.presence_of_element_located((By.ID, "bothBuddyRadio")))
+            except: return False, "스킵(로딩 Timeout)"
 
-        # -------------------------------------------------------
-        # 6. 메시지 전송 (수정됨)
-        # -------------------------------------------------------
-        if "5000" in driver.page_source and "초과" in driver.page_source: return False, "실패(상대 정원 초과)"
-
+        # 메시지 입력
         try:
-            # 텍스트 영역 찾기
             textarea = WebDriverWait(driver, 2).until(EC.visibility_of_element_located((By.TAG_NAME, "textarea")))
-            
-            # [핵심 수정] 값 입력 후 'input' 이벤트를 강제로 발생시켜야 네이버가 인식함
             driver.execute_script("""
                 var el = arguments[0];
                 var txt = arguments[1];
@@ -216,93 +199,122 @@ def process_neighbor_natural(driver, blog_id):
                 el.dispatchEvent(new Event('change', { bubbles: true }));
                 el.dispatchEvent(new Event('blur', { bubbles: true }));
             """, textarea, APPLY_MESSAGE)
-            
-        except: 
-            # JS 실패 시, 최후의 수단으로 타이핑 시도 (느리지만 확실함)
+        except:
             try:
                 textarea.click()
-                textarea.clear()
                 textarea.send_keys(APPLY_MESSAGE)
             except: pass
 
+        # 확인 버튼 클릭
         try:
             confirm_btn = driver.find_element(By.XPATH, "//*[text()='확인']")
             driver.execute_script("arguments[0].click();", confirm_btn)
         except: return False, "실패(확인 버튼 없음)"
 
-        # 최종 검증
+        # 최종 결과 확인
         if check_html_limit_popup(driver): return False, "실패(상대 정원 5000명 초과)"
-
         final_alert = check_alert(driver)
         if final_alert:
             if "완료" in final_alert or "보냈습니다" in final_alert: return True, "성공"
             if "그룹" in final_alert and "가득" in final_alert: return "STOP_ERROR", f"중단(그룹꽉참)"
             if "하루" in final_alert or "100명" in final_alert: return "DONE_DAY", "완료(한도달성)"
-            if "5,000" in final_alert or "초과" in final_alert: return False, f"실패(상대 5000명 초과)"
             return False, f"실패(알림: {final_alert})"
 
         return True, "성공"
 
     except Exception as e:
         return False, f"에러({str(e)[:20]})"
-    
-    finally:
-        try:
-            if len(driver.window_handles) > 1: driver.close()
-            driver.switch_to.window(driver.window_handles[0])
-        except: pass
 
+# =========================================================
+# 메인 실행부 (구조 개선됨)
+# =========================================================
 def main():
     driver = connect_debugger_driver()
     if not driver:
         print("❌ 크롬 연결 실패")
         return
 
-    print("🍃 서이추 봇 (Natural 모드: 프로필 경유 + 차단 감지)")
+    # [중요] 시작 시점의 윈도우 핸들(검색결과 탭)을 메인으로 저장
+    main_window_handle = driver.current_window_handle
+    print(f"📍 메인 탭 설정 완료: {driver.title}")
+
+    print("🍃 서이추 봇 시작 (탭 분리 모드)")
     print(f"🎯 목표: {TARGET_COUNT}명")
 
     success_count = 0
     processed_ids = set()
+    candidate_queue = [] # 작업할 ID 대기열
 
     while success_count < TARGET_COUNT:
-        print("\n🔄 목록 갱신 중...")
-        current_batch = prepare_enough_ids(driver, 30, processed_ids)
-        new_ids = [i for i in current_batch if i not in processed_ids]
-        
-        print(f"🔍 대기열: {len(new_ids)}명")
-        
-        if not new_ids:
-            print("   더 이상 ID가 없습니다.")
-            break
+        # 1. 대기열에 아이디가 부족하면 메인 탭에서 수집
+        if len(candidate_queue) == 0:
+            print("\n🔄 추가 ID 수집을 위해 메인 탭으로 이동...")
+            
+            # 메인 탭으로 확실하게 전환
+            driver.switch_to.window(main_window_handle)
+            
+            # 스크롤을 내리며 새로운 아이디 찾기
+            attempts = 0
+            while len(candidate_queue) < 5 and attempts < 10: # 최소 5개 이상 찾을 때까지 스크롤
+                new_ids = collect_ids_from_current_page(driver)
+                # 이미 처리한 ID 제외하고 큐에 추가
+                for nid in new_ids:
+                    if nid not in processed_ids and nid not in candidate_queue:
+                        candidate_queue.append(nid)
+                
+                if len(candidate_queue) < 5:
+                    print(f"   [스크롤 {attempts+1}] 현재 대기열: {len(candidate_queue)}개 - 더 로딩합니다.")
+                    scrolled = perform_scroll_and_load(driver)
+                    if not scrolled:
+                        print("   ⚠️ 더 이상 스크롤할 수 없습니다 (페이지 끝).")
+                        break
+                    attempts += 1
+            
+            print(f"✅ 수집 완료. 대기열: {len(candidate_queue)}명")
+            
+            if not candidate_queue:
+                print("🏁 더 이상 작업할 블로그가 없습니다. 종료합니다.")
+                break
 
-        for blog_id in new_ids:
-            if success_count >= TARGET_COUNT: break
-            
-            processed_ids.add(blog_id)
-            res, msg = process_neighbor_natural(driver, blog_id)
-            
-            # [중요] 차단 감지 시 쿨타임 적용
-            if res == "BLOCK_DETECTED":
-                print(f"\n🚨 {msg} -> 30초간 대기 후 재시도합니다...")
-                time.sleep(30)
-                continue # 이번 ID는 넘어가고 다음부터 다시
-            
-            elif res == "DONE_DAY":
-                print(f"\n🎉 {msg}")
-                return
-            elif res == "STOP_ERROR":
-                print(f"\n⛔ {msg}")
-                return
-            elif res is True:
-                success_count += 1
-                print(f"✅ [{success_count}] {blog_id}: {msg}")
-            else:
-                print(f"   ❌ {blog_id}: {msg}")
-            
-            # 봇 탐지 회피를 위한 랜덤 대기 (1.5초 ~ 2.5초)
-            time.sleep(random.uniform(1.5, 2.5))
+        # 2. 대기열에서 아이디 꺼내서 작업 (새 탭 열기 -> 작업 -> 닫기)
+        blog_id = candidate_queue.pop(0)
+        processed_ids.add(blog_id)
 
-    print(f"🎉 완료!")
+        # 새 탭 열기 (URL 바로 이동)
+        driver.execute_script(f"window.open('https://m.blog.naver.com/{blog_id}');")
+        
+        # 새로 열린 탭으로 포커스 이동 (가장 최근 핸들)
+        driver.switch_to.window(driver.window_handles[-1])
+
+        # 작업 수행
+        res, msg = process_logic_in_tab(driver, blog_id)
+
+        # 탭 닫기
+        driver.close()
+        
+        # [중요] 메인 탭으로 포커스 복구
+        driver.switch_to.window(main_window_handle)
+
+        # 결과 처리
+        if res == "BLOCK_DETECTED":
+            print(f"\n🚨 {msg} -> 30초간 대기합니다...")
+            time.sleep(30)
+        elif res == "DONE_DAY":
+            print(f"\n🎉 {msg}")
+            return
+        elif res == "STOP_ERROR":
+            print(f"\n⛔ {msg}")
+            return
+        elif res is True:
+            success_count += 1
+            print(f"✅ [{success_count}/{TARGET_COUNT}] {blog_id}: {msg}")
+        else:
+            print(f"   ❌ {blog_id}: {msg}")
+
+        # 랜덤 대기
+        time.sleep(random.uniform(1.5, 2.5))
+
+    print(f"🎉 목표 달성 완료!")
 
 if __name__ == "__main__":
     main()
