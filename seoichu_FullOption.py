@@ -29,11 +29,13 @@ def connect_debugger_driver():
     chrome_options = Options()
     chrome_options.add_experimental_option("debuggerAddress", "127.0.0.1:9222")
     chrome_options.page_load_strategy = 'eager'
+    
+    # 🚀 [수정] log 대신 print 사용 + flush=True 추가 (즉시 출력)
     try:
         driver = webdriver.Chrome(options=chrome_options)
         return driver
     except Exception as e:
-        print("❌ 크롬 연결 실패! 디버깅 모드로 크롬이 실행 중인지 확인하세요.")
+        print("❌ 크롬 연결 실패! 디버깅 모드로 크롬이 실행 중인지 확인하세요.", flush=True)
         return None
 
 # ==========================================
@@ -339,19 +341,22 @@ def process_comment(driver, blog_id):
 # ==========================================
 # 이 줄을 파일 맨 위에 추가해야 합니다 (없다면)
 def main():
+    print("===================================", flush=True)
+    print("🚀 봇 가동 시퀀스 시작", flush=True)
+    print("===================================", flush=True)
+    
     driver = connect_debugger_driver()
-    if not driver: return
+    if not driver:
+        print("❌ 드라이버 연결 실패로 종료합니다.", flush=True)
+        return
 
+    # 메인 윈도우 핸들 저장 (ID)
     main_window = driver.current_window_handle
     
-    # 설정 검증
     my_id_clean = MY_BLOG_ID.strip().lower()
     BLACKLIST = {"myblog", "postlist", "buddyaddform", "likeit", "nvisitor", "blog", "domainid", "admin"}
     
-    if "your_id" in my_id_clean:
-        print("⚠️ [경고] 설정에 본인 아이디를 입력하지 않았습니다!")
-
-    print(f"🚀 봇 가동 시작! (내 아이디 '{MY_BLOG_ID}' 제외)")
+    print(f"📋 설정 확인: 타겟 {TARGET_COUNT}명 / 제외 ID '{MY_BLOG_ID}'", flush=True)
 
     success_cnt = 0
     processed_ids = set()
@@ -360,72 +365,104 @@ def main():
     while success_cnt < TARGET_COUNT:
         # [A] 대기열 보충
         if not queue:
-            print("🔄 ID 수집 중...")
-            driver.switch_to.window(main_window)
-            for _ in range(3):
+            print(f"🔄 대기열이 비었습니다. ID 수집을 시작합니다... (현재 처리완료: {len(processed_ids)}명)", flush=True)
+            
+            try:
+                # 메인 탭으로 전환하기 전에 브라우저가 살아있는지 확인
+                if not driver.window_handles:
+                    print("❌ 브라우저가 닫혀있습니다. 종료합니다.", flush=True)
+                    return
+                driver.switch_to.window(main_window)
+            except Exception as e:
+                print(f"❌ 메인 탭 접근 불가 (종료됨): {e}", flush=True)
+                return
+            
+            for i in range(3):
+                print(f"   ⬇️ 스크롤 내리는 중 ({i+1}/3)...", flush=True)
                 driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
                 time.sleep(0.5)
 
-            links = driver.find_elements(By.TAG_NAME, "a")
-            for link in links:
+            found_count = 0
+            for link in driver.find_elements(By.TAG_NAME, "a"):
                 try:
                     href = link.get_attribute("href")
                     if href and "blog.naver.com" in href:
                         match = re.search(r'blog\.naver\.com\/([a-zA-Z0-9_-]+)', href)
                         if match:
                             bid = match.group(1)
-                            bid_lower = bid.lower()
-                            if bid_lower in BLACKLIST: continue
-                            if bid_lower == my_id_clean: continue
+                            bid_l = bid.lower()
+                            if bid_l in BLACKLIST or bid_l == my_id_clean: continue
                             if bid not in processed_ids and len(bid) > 3:
                                 queue.append(bid)
                                 processed_ids.add(bid)
+                                found_count += 1
                 except: continue
-
-            print(f"👉 현재 대기열: {len(queue)}명")
+            
+            print(f"   ✅ {found_count}개의 새로운 ID 발견! (현재 대기열: {len(queue)}명)", flush=True)
+            
             if not queue:
-                print("⚠️ 더 이상 수집할 블로그가 없어 종료합니다.")
+                print("⚠️ 더 이상 수집할 블로그가 없습니다. 종료합니다.", flush=True)
                 break
 
         # [B] 작업 시작
         blog_id = queue.pop(0)
+        if blog_id.lower() == my_id_clean or blog_id.lower() in BLACKLIST: continue
 
-        if blog_id.lower() == my_id_clean or blog_id.lower() in BLACKLIST:
+        print(f"\n▶️ [{success_cnt+1}/{TARGET_COUNT}] '{blog_id}' 작업 시작", flush=True)
+        
+        # 1. 새 탭 열기 (Selenium 내장 기능 사용 - 가장 안정적)
+        try:
+            # 탭을 열면서 동시에 스위치까지 한 번에 처리
+            driver.switch_to.new_window('tab')
+            
+            # 주소 이동
+            driver.get(f"https://m.blog.naver.com/{blog_id}")
+            
+        except Exception as e:
+            print(f"   ⚠️ 탭 진입 실패({blog_id}): {e}", flush=True)
+            # 실패 시 현재 탭 닫고 메인으로 복귀 시도
+            try: 
+                if len(driver.window_handles) > 1: driver.close()
+                driver.switch_to.window(main_window)
+            except: pass
             continue
 
-        # 1. 탭 열기
-        driver.execute_script(f"window.open('https://m.blog.naver.com/{blog_id}');")
-        driver.switch_to.window(driver.window_handles[-1])
-        time.sleep(0.5)
+        time.sleep(1.0)
 
+        # 🚨 [MobileErrorView 처리 수정] - 여기가 문제였음
         if "MobileErrorView" in driver.current_url or "일시적인 오류" in driver.page_source:
-            print(f"   ❌ {blog_id}: 없는 블로그/접근제한 (Skip)")
-            driver.close()
-            driver.switch_to.window(main_window)
+            print(f"   ❌ 접근 불가/차단된 블로그 (Skip)", flush=True)
+            try:
+                # [핵심] 현재 탭이 메인 탭이 아닐 때만 닫는다!
+                if driver.current_window_handle != main_window and len(driver.window_handles) > 1:
+                    driver.close()
+                driver.switch_to.window(main_window)
+            except Exception as e:
+                print(f"   ⚠️ 탭 닫기 중 오류 발생 (무시하고 진행): {e}", flush=True)
+                try: driver.switch_to.window(main_window)
+                except: return # 메인 탭도 없으면 종료
             continue
 
-        print(f"\n[{success_cnt+1}/{TARGET_COUNT}] {blog_id} 진입...")
-
-        # 2. 서이추
+        # 2. 서이추 실행
         is_friend, msg_friend = process_neighbor(driver, blog_id)
-        if is_friend == "DONE_DAY_LIMIT": # 하루 할당량 달성 시 종료
-            print(f"\n" + "="*40)
-            print(f"🎉🎉🎉 축하합니다!!! 🎉🎉🎉")
-            print(f"오늘 신청 가능한 이웃 수(100명)를 모두 채웠습니다.")
-            print(f"정말 고생 많으셨습니다! 오늘은 푹 쉬세요 :)")
-            print(f"="*40 + "\n")
-            driver.close()
-            driver.switch_to.window(main_window)
+        
+        if is_friend == "DONE_DAY_LIMIT":
+            print(f"\n🎉🎉🎉 목표 달성! 오늘 할당량을 모두 채웠습니다. 🎉🎉🎉", flush=True)
+            try:
+                if driver.current_window_handle != main_window: driver.close()
+                driver.switch_to.window(main_window)
+            except: pass
             break
             
-        if is_friend == "STOP_GROUP_FULL": # 그룹 초과 시 종료
-            print(f"\n⛔⛔⛔ [프로그램 긴급 정지] ⛔⛔⛔")
-            print(f"사유: {msg_friend}")
-            driver.close()
-            driver.switch_to.window(main_window)
+        if is_friend == "STOP_GROUP_FULL":
+            print(f"\n⛔ 내 이웃 그룹이 가득 찼습니다. 정리 후 실행하세요.", flush=True)
+            try:
+                if driver.current_window_handle != main_window: driver.close()
+                driver.switch_to.window(main_window)
+            except: pass
             break
 
-        print(f"   └ 서이추: {msg_friend}")
+        print(f"   └ 서이추: {msg_friend}", flush=True)
 
         # 3. 홈 복귀
         if "BuddyAddForm" in driver.current_url:
@@ -433,39 +470,43 @@ def main():
             time.sleep(0.8)
 
         # 4. 공감 & 댓글
-        # 서이추가 '실패/에러/스킵'이 아닐 때만 진입
         if "실패" not in msg_friend and "에러" not in msg_friend and "스킵" not in msg_friend:
-            
-            # (1) 공감 시도
             msg_like = process_like(driver)
-            print(f"   └ 공감: {msg_like}")
+            print(f"   └ 공감: {msg_like}", flush=True)
 
             if "실패" in msg_like or "없음" in msg_like:
-                print("   └ 댓글: 스킵(공감 실패)")
+                print("   └ 댓글: 스킵(공감 실패)", flush=True)
             else:
-                # 🚨 [핵심 수정] 랜덤 로직 삭제 -> 무조건 댓글 시도
-                # 댓글이 막혀있으면 process_comment 내부에서 "댓글 버튼 없음"을 반환함
-                msg_comment = process_comment(driver, blog_id)
-                print(f"   └ 댓글: {msg_comment}")
+                msg_cmt = process_comment(driver, blog_id)
+                print(f"   └ 댓글: {msg_cmt}", flush=True)
 
             if is_friend is True: success_cnt += 1
 
-        # 5. 탭 닫기
+        # 5. 탭 닫기 (안전장치 강화)
         try:
-            driver.close()
-        except UnexpectedAlertPresentException:
-            try:
-                driver.switch_to.alert.accept()
-                driver.close()
+            # 알림창 있으면 닫기
+            try: driver.switch_to.alert.accept()
             except: pass
-        except Exception: pass
+            
+            # 메인 탭이 아닐 때만 close
+            if driver.current_window_handle != main_window and len(driver.window_handles) > 1:
+                driver.close()
+                
+        except Exception as e:
+            # 이미 닫혔거나 에러나면 무시
+            pass
 
-        driver.switch_to.window(main_window)
+        # 메인 탭 복귀
+        try:
+            driver.switch_to.window(main_window)
+        except Exception as e:
+            print("❌ 메인 탭으로 돌아갈 수 없습니다. (브라우저 종료됨)", flush=True)
+            return
 
-        wait_time = random.uniform(0.5, 1.2)
-        time.sleep(wait_time)
+        wait_t = random.uniform(0.5, 1.2)
+        time.sleep(wait_t)
 
-    print("🎉 프로그램 종료")
+    print("🎉 프로그램 종료", flush=True)
 
 if __name__ == "__main__":
     main()
