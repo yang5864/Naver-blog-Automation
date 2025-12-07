@@ -51,9 +51,9 @@ class NaverBotLogic:
         # 성능 설정
         self.page_load_timeout = 15
         self.element_wait_timeout = 5
-        self.fast_wait = 0.3
-        self.normal_wait = 0.8
-        self.slow_wait = 1.5
+        self.fast_wait = 0.2  # 더 빠른 처리
+        self.normal_wait = 0.5  # 더 빠른 처리
+        self.slow_wait = 1.0    # 더 빠른 처리
 
     def safe_sleep(self, seconds):
         if seconds > 0:
@@ -141,11 +141,16 @@ class NaverBotLogic:
                     gui_y = self.gui_window.winfo_y()
                     gui_width = self.gui_window.winfo_width()
                     gui_height = self.gui_window.winfo_height()
-                    chrome_x = gui_x + gui_width - 5  # GUI 바로 옆에 붙이기
-                    chrome_y = gui_y
+                    left_panel_width = 420
+                    padding_x = 15  # 오른쪽 패널 하얀색 카드 패딩 (크롬 창 크기를 키우기 위해 축소)
+                    padding_y = 0   # 높이는 GUI와 동일하게
+                    chrome_x = gui_x + left_panel_width + padding_x  # 하얀색 카드 영역 시작
+                    chrome_y = gui_y + padding_y
+                    chrome_width = gui_width - left_panel_width - (padding_x * 2)
                     chrome_height = gui_height
                 else:
                     chrome_x, chrome_y = 800, 0
+                    chrome_width = 1000
                     chrome_height = 900
                 
                 cmd = [
@@ -154,13 +159,13 @@ class NaverBotLogic:
                     f"--user-data-dir={user_data_dir}",
                     "--no-first-run",
                     "--no-default-browser-check",
-                    "--window-size=1000,900",  # 너비 1200 -> 1000으로 줄임
+                    f"--window-size={chrome_width},{chrome_height}",
                     f"--window-position={chrome_x},{chrome_y}",
                     "--disable-blink-features=AutomationControlled",
                 ]
                 
                 subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                time.sleep(3)
+                time.sleep(2.5)  # 크롬 시작 대기 (약간 단축)
                 
                 chrome_options = Options()
                 chrome_options.add_experimental_option("debuggerAddress", "127.0.0.1:9222")
@@ -182,7 +187,7 @@ class NaverBotLogic:
                 return False
     
     def _position_chrome_window(self, gui_window=None):
-        """크롬 창을 GUI 오른쪽 패널 위치에 배치"""
+        """크롬 창을 GUI 오른쪽 패널 하얀색 카드 영역에 정확히 배치"""
         if not self.driver:
             return
         
@@ -200,12 +205,19 @@ class NaverBotLogic:
             gui_width = gui_window.winfo_width()
             gui_height = gui_window.winfo_height()
             
-            # 오른쪽 패널 위치 계산 (GUI 바로 옆에 붙이기, 약간의 간격만)
-            chrome_x = gui_x + gui_width - 5  # 5px 겹치기 (GUI와 자연스럽게 연결)
-            chrome_y = gui_y
+            # 왼쪽 패널 너비 (고정값)
+            left_panel_width = 420
             
-            # 크롬 창 크기 (오른쪽 패널 크기에 맞춤, 좌우 약간 줄임)
-            chrome_width = 1000  # 1200 -> 1000으로 줄임
+            # 오른쪽 패널 하얀색 카드 패딩 (크롬 창 크기를 키우기 위해 패딩 축소)
+            padding_x = 15  # 30 -> 15로 줄여서 크롬 창 더 넓게
+            padding_y = 0   # 높이는 GUI와 동일하게
+            
+            # 크롬 창 위치 계산 (하얀색 카드 영역에 맞춤)
+            chrome_x = gui_x + left_panel_width + padding_x
+            chrome_y = gui_y + padding_y
+            
+            # 크롬 창 크기 (하얀색 카드 영역 크기에 맞춤, 높이는 GUI와 동일)
+            chrome_width = gui_width - left_panel_width - (padding_x * 2)
             chrome_height = gui_height
             
             # 크롬 창 위치 및 크기 설정
@@ -230,7 +242,7 @@ class NaverBotLogic:
         try:
             if not self.safe_get(self.driver, f"https://m.blog.naver.com/{self.my_blog_id}"):
                 return False
-            self.safe_sleep(2.0)
+            self.safe_sleep(1.0)  # 2.0 -> 1.0으로 단축
             
             page_source = self.driver.page_source
             current_url = self.driver.current_url
@@ -257,7 +269,7 @@ class NaverBotLogic:
         self.log("🌐 네이버 접속 중...")
         try:
             self.driver.get("https://www.naver.com")
-            self.safe_sleep(1.0)
+            self.safe_sleep(0.5)  # 1.0 -> 0.5로 단축
             
             if self.check_login_status():
                 self.log("✅ 이미 로그인 되어 있습니다!")
@@ -278,7 +290,7 @@ class NaverBotLogic:
             elem_id.send_keys(Keys.DELETE)
             pyperclip.copy(uid)
             elem_id.send_keys(cmd_key, 'v')
-            self.safe_sleep(0.5)
+            self.safe_sleep(0.2)  # 0.5 -> 0.2로 단축
 
             elem_pw = self.driver.find_element(By.ID, 'pw')
             elem_pw.click()
@@ -286,7 +298,7 @@ class NaverBotLogic:
             elem_pw.send_keys(Keys.DELETE)
             pyperclip.copy(upw)
             elem_pw.send_keys(cmd_key, 'v')
-            self.safe_sleep(0.5)
+            self.safe_sleep(0.2)  # 0.5 -> 0.2로 단축
 
             self.driver.find_element(By.ID, "log.login").click()
             self.log("⏳ 로그인 처리 중...")
@@ -315,7 +327,7 @@ class NaverBotLogic:
             if not self.safe_get(self.driver, search_url):
                 self.log("❌ 검색 페이지 이동 실패")
                 return
-            self.safe_sleep(2.0)
+            self.safe_sleep(1.0)  # 2.0 -> 1.0으로 단축
             
             # 블로그 탭 클릭
             try:
@@ -335,7 +347,7 @@ class NaverBotLogic:
                 if blog_tab:
                     self.log("   ↪ '블로그' 탭 클릭...")
                     self.safe_click(self.driver, blog_tab)
-                    self.safe_sleep(2.0)
+                    self.safe_sleep(1.0)  # 2.0 -> 1.0으로 단축
             except:
                 pass
             
@@ -355,7 +367,7 @@ class NaverBotLogic:
         
         while len(queue) < 20 and scroll_attempts < max_scroll:
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            self.safe_sleep(2.0)
+            self.safe_sleep(1.0)  # 2.0 -> 1.0으로 단축
             
             new_count = 0
             try:
@@ -401,7 +413,7 @@ class NaverBotLogic:
                     more_btn = self.driver.find_element(By.CSS_SELECTOR, ".btn_more, .more_btn")
                     if more_btn.is_displayed():
                         self.safe_click(self.driver, more_btn)
-                        self.safe_sleep(1.5)
+                        self.safe_sleep(0.8)  # 1.5 -> 0.8로 단축
                 except:
                     pass
         
@@ -433,7 +445,7 @@ class NaverBotLogic:
             if not clicked:
                 return False, "스킵(버튼 없음)"
 
-            self.safe_sleep(1.0)
+            self.safe_sleep(0.3)  # 1.0 -> 0.3으로 단축
 
             src_after = driver.page_source
             if "하루에 신청 가능한 이웃수" in src_after and "초과" in src_after:
@@ -450,7 +462,7 @@ class NaverBotLogic:
                     for btn in cancel_btns:
                         if btn.is_displayed():
                             self.safe_click(driver, btn)
-                            self.safe_sleep(0.2)
+                            self.safe_sleep(0.1)  # 0.2 -> 0.1로 단축
                             return False, "스킵(이미 신청중)"
                 except:
                     pass
@@ -482,14 +494,14 @@ class NaverBotLogic:
             if "BuddyAddForm" not in current_url:
                 if not self.safe_get(driver, f"https://m.blog.naver.com/BuddyAddForm.naver?blogId={blog_id}"):
                     return False, "실패(양식 페이지 로드 실패)"
-                self.safe_sleep(2.0)
+                self.safe_sleep(1.0)  # 2.0 -> 1.0으로 단축
             
             page_src = driver.page_source
             if "로그인" in page_src and "로그인이 필요" in page_src:
                 return False, "실패(로그인 필요)"
             
             try:
-                self.safe_sleep(0.5)
+                self.safe_sleep(0.2)  # 0.5 -> 0.2로 단축
                 radio_exists = driver.execute_script("return document.getElementById('bothBuddyRadio') !== null;")
                 
                 if not radio_exists:
@@ -701,7 +713,7 @@ class NaverBotLogic:
         if not self.safe_get(self.driver, search_url):
             self.log("❌ 검색 페이지 로드 실패")
             return
-        self.safe_sleep(2.0)
+        self.safe_sleep(1.0)  # 2.0 -> 1.0으로 단축
         
         # 블로그 탭 클릭
         try:
@@ -721,7 +733,7 @@ class NaverBotLogic:
             if blog_tab:
                 self.log("   ↪ '블로그' 탭 클릭...")
                 self.safe_click(self.driver, blog_tab)
-                self.safe_sleep(2.0)
+                self.safe_sleep(1.0)  # 2.0 -> 1.0으로 단축
         except:
             pass
         
@@ -861,17 +873,18 @@ class NaverBotLogic:
 ctk.set_appearance_mode("Light")  # iOS는 밝은 모드
 ctk.set_default_color_theme("blue")
 
-# iOS 스타일 색상
+# iOS 스타일 색상 (더 세련된 팔레트)
 IOS_COLORS = {
-    "background": "#F2F2F7",  # iOS 배경색
+    "background": "#F5F5F7",  # 더 부드러운 배경색
     "card": "#FFFFFF",  # 카드 배경
     "primary": "#007AFF",  # iOS 파란색
     "secondary": "#5856D6",  # 보라색
     "success": "#34C759",  # 초록색
     "danger": "#FF3B30",  # 빨간색
-    "text_primary": "#000000",
-    "text_secondary": "#8E8E93",
-    "separator": "#C6C6C8",
+    "text_primary": "#1D1D1F",  # 더 부드러운 검정
+    "text_secondary": "#86868B",  # 더 부드러운 회색
+    "separator": "#D2D2D7",
+    "input_bg": "#F5F5F7",  # 입력 필드 배경
 }
 
 # iOS 스타일 폰트 (CustomTkinter는 튜플 형식만 지원)
@@ -913,9 +926,9 @@ class App(ctk.CTk):
         # 헤더 영역 (iOS 스타일) - 고정
         header_frame = ctk.CTkFrame(
             self.left_panel,
-            fg_color=IOS_COLORS["card"],
+            fg_color=IOS_COLORS["background"],
             corner_radius=0,
-            height=120
+            height=100
         )
         header_frame.grid(row=0, column=0, sticky="ew", padx=0, pady=0)
         header_frame.grid_propagate(False)
@@ -927,7 +940,7 @@ class App(ctk.CTk):
             font=IOS_FONT_LARGE,
             text_color=IOS_COLORS["text_primary"]
         )
-        self.lbl_title.pack(pady=(25, 5))
+        self.lbl_title.pack(pady=(28, 4))
 
         self.lbl_credit = ctk.CTkLabel(
             header_frame, 
@@ -935,7 +948,7 @@ class App(ctk.CTk):
             font=IOS_FONT_SMALL,
             text_color=IOS_COLORS["text_secondary"]
         )
-        self.lbl_credit.pack(pady=(0, 20))
+        self.lbl_credit.pack(pady=(0, 24))
 
         # 스크롤 가능한 컨텐츠 영역
         self.scrollable_frame = ctk.CTkScrollableFrame(
@@ -945,14 +958,22 @@ class App(ctk.CTk):
         )
         self.scrollable_frame.grid(row=1, column=0, sticky="nsew", padx=0, pady=0)
         self.scrollable_frame.grid_columnconfigure(0, weight=1)
+        
+        # 마우스 휠 이벤트 바인딩 (스크롤 개선) - 왼쪽 패널에만 적용
+        self.left_panel.bind("<MouseWheel>", self._on_mousewheel)
+        self.left_panel.bind("<Button-4>", self._on_mousewheel)  # Linux
+        self.left_panel.bind("<Button-5>", self._on_mousewheel)  # Linux
+        self.scrollable_frame.bind("<MouseWheel>", self._on_mousewheel)
+        self.scrollable_frame.bind("<Button-4>", self._on_mousewheel)  # Linux
+        self.scrollable_frame.bind("<Button-5>", self._on_mousewheel)  # Linux
 
         # 로그인 카드 (iOS 스타일)
         self.frame_login = ctk.CTkFrame(
             self.scrollable_frame,
             fg_color=IOS_COLORS["card"],
-            corner_radius=12
+            corner_radius=16
         )
-        self.frame_login.grid(row=0, column=0, padx=16, pady=(16, 8), sticky="ew")
+        self.frame_login.grid(row=0, column=0, padx=20, pady=(20, 12), sticky="ew")
         
         login_title = ctk.CTkLabel(
             self.frame_login,
@@ -960,26 +981,30 @@ class App(ctk.CTk):
             font=IOS_FONT_MEDIUM,
             text_color=IOS_COLORS["text_primary"]
         )
-        login_title.pack(anchor="w", padx=16, pady=(16, 12))
+        login_title.pack(anchor="w", padx=20, pady=(20, 14))
         
         self.entry_id = ctk.CTkEntry(
             self.frame_login,
             placeholder_text="네이버 ID",
-            corner_radius=8,
-            height=44,
-            font=IOS_FONT_REGULAR
+            corner_radius=10,
+            height=48,
+            font=IOS_FONT_REGULAR,
+            fg_color=IOS_COLORS["input_bg"],
+            border_width=0
         )
-        self.entry_id.pack(fill="x", padx=16, pady=(0, 8))
+        self.entry_id.pack(fill="x", padx=20, pady=(0, 10))
         
         self.entry_pw = ctk.CTkEntry(
             self.frame_login,
             placeholder_text="비밀번호",
             show="*",
-            corner_radius=8,
-            height=44,
-            font=IOS_FONT_REGULAR
+            corner_radius=10,
+            height=48,
+            font=IOS_FONT_REGULAR,
+            fg_color=IOS_COLORS["input_bg"],
+            border_width=0
         )
-        self.entry_pw.pack(fill="x", padx=16, pady=(0, 16))
+        self.entry_pw.pack(fill="x", padx=20, pady=(0, 20))
         
         self.btn_login = ctk.CTkButton(
             self.frame_login,
@@ -987,19 +1012,19 @@ class App(ctk.CTk):
             command=self.on_login,
             fg_color=IOS_COLORS["primary"],
             hover_color="#0051D5",
-            corner_radius=10,
-            height=44,
+            corner_radius=12,
+            height=50,
             font=("SF Pro Text", 16, "bold")
         )
-        self.btn_login.pack(fill="x", padx=16, pady=(0, 16))
+        self.btn_login.pack(fill="x", padx=20, pady=(0, 20))
 
         # 검색 카드
         self.frame_search = ctk.CTkFrame(
             self.scrollable_frame,
             fg_color=IOS_COLORS["card"],
-            corner_radius=12
+            corner_radius=16
         )
-        self.frame_search.grid(row=1, column=0, padx=16, pady=8, sticky="ew")
+        self.frame_search.grid(row=1, column=0, padx=20, pady=12, sticky="ew")
         self.frame_search.grid_columnconfigure(0, weight=1)
         
         search_title = ctk.CTkLabel(
@@ -1008,37 +1033,39 @@ class App(ctk.CTk):
             font=IOS_FONT_MEDIUM,
             text_color=IOS_COLORS["text_primary"]
         )
-        search_title.grid(row=0, column=0, columnspan=2, sticky="w", padx=16, pady=(16, 12))
+        search_title.grid(row=0, column=0, columnspan=2, sticky="w", padx=20, pady=(20, 14))
         
         self.entry_keyword = ctk.CTkEntry(
             self.frame_search,
             placeholder_text="검색 키워드",
-            corner_radius=8,
-            height=44,
-            font=IOS_FONT_REGULAR
+            corner_radius=10,
+            height=48,
+            font=IOS_FONT_REGULAR,
+            fg_color=IOS_COLORS["input_bg"],
+            border_width=0
         )
-        self.entry_keyword.grid(row=1, column=0, padx=(16, 8), pady=(0, 16), sticky="ew")
+        self.entry_keyword.grid(row=1, column=0, padx=(20, 10), pady=(0, 20), sticky="ew")
         
         self.btn_search = ctk.CTkButton(
             self.frame_search,
             text="이동",
-            width=70,
+            width=80,
             command=self.on_search,
             fg_color=IOS_COLORS["secondary"],
             hover_color="#4A4AC4",
-            corner_radius=8,
-            height=44,
+            corner_radius=10,
+            height=48,
             font=("SF Pro Text", 15, "bold")
         )
-        self.btn_search.grid(row=1, column=1, padx=(0, 16), pady=(0, 16))
+        self.btn_search.grid(row=1, column=1, padx=(0, 20), pady=(0, 20))
 
         # 설정 카드
         self.frame_settings = ctk.CTkFrame(
             self.scrollable_frame,
             fg_color=IOS_COLORS["card"],
-            corner_radius=12
+            corner_radius=16
         )
-        self.frame_settings.grid(row=2, column=0, padx=16, pady=8, sticky="ew")
+        self.frame_settings.grid(row=2, column=0, padx=20, pady=12, sticky="ew")
         
         settings_title = ctk.CTkLabel(
             self.frame_settings,
@@ -1046,10 +1073,10 @@ class App(ctk.CTk):
             font=IOS_FONT_MEDIUM,
             text_color=IOS_COLORS["text_primary"]
         )
-        settings_title.pack(anchor="w", padx=16, pady=(16, 12))
+        settings_title.pack(anchor="w", padx=20, pady=(20, 14))
         
         target_row = ctk.CTkFrame(self.frame_settings, fg_color="transparent")
-        target_row.pack(fill="x", padx=16, pady=(0, 12))
+        target_row.pack(fill="x", padx=20, pady=(0, 20))
         
         self.lbl_target = ctk.CTkLabel(
             target_row,
@@ -1063,10 +1090,12 @@ class App(ctk.CTk):
             target_row,
             placeholder_text="100",
             width=100,
-            corner_radius=8,
-            height=36,
+            corner_radius=10,
+            height=40,
             font=IOS_FONT_REGULAR,
-            justify="center"
+            justify="center",
+            fg_color=IOS_COLORS["input_bg"],
+            border_width=0
         )
         self.entry_target.pack(side="right")
         self.entry_target.insert(0, "100")
@@ -1075,9 +1104,9 @@ class App(ctk.CTk):
         self.frame_msg = ctk.CTkFrame(
             self.scrollable_frame,
             fg_color=IOS_COLORS["card"],
-            corner_radius=12
+            corner_radius=16
         )
-        self.frame_msg.grid(row=3, column=0, padx=16, pady=8, sticky="ew")
+        self.frame_msg.grid(row=3, column=0, padx=20, pady=12, sticky="ew")
 
         msg_title = ctk.CTkLabel(
             self.frame_msg,
@@ -1085,7 +1114,7 @@ class App(ctk.CTk):
             font=IOS_FONT_MEDIUM,
             text_color=IOS_COLORS["text_primary"]
         )
-        msg_title.pack(anchor="w", padx=16, pady=(16, 12))
+        msg_title.pack(anchor="w", padx=20, pady=(20, 14))
 
         self.lbl_msg = ctk.CTkLabel(
             self.frame_msg,
@@ -1093,17 +1122,18 @@ class App(ctk.CTk):
             font=IOS_FONT_SMALL,
             text_color=IOS_COLORS["text_secondary"]
         )
-        self.lbl_msg.pack(anchor="w", padx=16, pady=(0, 6))
+        self.lbl_msg.pack(anchor="w", padx=20, pady=(0, 8))
 
         self.txt_msg = ctk.CTkTextbox(
             self.frame_msg,
-            height=70,
-            corner_radius=8,
+            height=75,
+            corner_radius=10,
             font=IOS_FONT_SMALL,
-            fg_color="#F2F2F7",
-            text_color=IOS_COLORS["text_primary"]
+            fg_color=IOS_COLORS["input_bg"],
+            text_color=IOS_COLORS["text_primary"],
+            border_width=0
         )
-        self.txt_msg.pack(fill="x", padx=16, pady=(0, 12))
+        self.txt_msg.pack(fill="x", padx=20, pady=(0, 14))
         self.txt_msg.insert("1.0", "블로그 스타일이 너무 좋아요! 저도 다양한 주제로 글 쓰고 있어서 함께 소통하면 좋을 것 같아 이웃 신청드립니다:)")
 
         self.lbl_cmt = ctk.CTkLabel(
@@ -1112,26 +1142,27 @@ class App(ctk.CTk):
             font=IOS_FONT_SMALL,
             text_color=IOS_COLORS["text_secondary"]
         )
-        self.lbl_cmt.pack(anchor="w", padx=16, pady=(0, 6))
+        self.lbl_cmt.pack(anchor="w", padx=20, pady=(0, 8))
 
         self.txt_cmt = ctk.CTkTextbox(
             self.frame_msg,
-            height=70,
-            corner_radius=8,
+            height=75,
+            corner_radius=10,
             font=IOS_FONT_SMALL,
-            fg_color="#F2F2F7",
-            text_color=IOS_COLORS["text_primary"]
+            fg_color=IOS_COLORS["input_bg"],
+            text_color=IOS_COLORS["text_primary"],
+            border_width=0
         )
-        self.txt_cmt.pack(fill="x", padx=16, pady=(0, 16))
+        self.txt_cmt.pack(fill="x", padx=20, pady=(0, 20))
         self.txt_cmt.insert("1.0", "안녕하세요! 포스팅 잘 보고 갑니다. 좋은 하루 보내세요~")
 
         # 액션 버튼 카드
         action_frame = ctk.CTkFrame(
             self.scrollable_frame,
             fg_color=IOS_COLORS["card"],
-            corner_radius=12
+            corner_radius=16
         )
-        action_frame.grid(row=4, column=0, padx=16, pady=8, sticky="ew")
+        action_frame.grid(row=4, column=0, padx=20, pady=12, sticky="ew")
 
         self.btn_start = ctk.CTkButton(
             action_frame,
@@ -1139,11 +1170,11 @@ class App(ctk.CTk):
             command=self.on_start,
             fg_color=IOS_COLORS["success"],
             hover_color="#30B350",
-            corner_radius=10,
-            height=50,
+            corner_radius=12,
+            height=54,
             font=("SF Pro Text", 17, "bold")
         )
-        self.btn_start.pack(fill="x", padx=16, pady=(16, 8))
+        self.btn_start.pack(fill="x", padx=20, pady=(20, 12))
 
         self.btn_stop = ctk.CTkButton(
             action_frame,
@@ -1151,19 +1182,19 @@ class App(ctk.CTk):
             command=self.on_stop,
             fg_color=IOS_COLORS["danger"],
             hover_color="#E6342A",
-            corner_radius=10,
-            height=50,
+            corner_radius=12,
+            height=54,
             font=("SF Pro Text", 17, "bold")
         )
-        self.btn_stop.pack(fill="x", padx=16, pady=(0, 16))
+        self.btn_stop.pack(fill="x", padx=20, pady=(0, 20))
 
         # 진행률 카드
         progress_frame = ctk.CTkFrame(
             self.scrollable_frame,
             fg_color=IOS_COLORS["card"],
-            corner_radius=12
+            corner_radius=16
         )
-        progress_frame.grid(row=5, column=0, padx=16, pady=8, sticky="ew")
+        progress_frame.grid(row=5, column=0, padx=20, pady=12, sticky="ew")
         
         progress_title = ctk.CTkLabel(
             progress_frame,
@@ -1171,15 +1202,15 @@ class App(ctk.CTk):
             font=IOS_FONT_MEDIUM,
             text_color=IOS_COLORS["text_primary"]
         )
-        progress_title.pack(anchor="w", padx=16, pady=(16, 12))
+        progress_title.pack(anchor="w", padx=20, pady=(20, 14))
         
         self.progressbar = ctk.CTkProgressBar(
             progress_frame,
             progress_color=IOS_COLORS["primary"],
-            height=6,
-            corner_radius=3
+            height=8,
+            corner_radius=4
         )
-        self.progressbar.pack(fill="x", padx=16, pady=(0, 12))
+        self.progressbar.pack(fill="x", padx=20, pady=(0, 14))
         self.progressbar.set(0)
         
         # 브라우저 상태
@@ -1189,15 +1220,15 @@ class App(ctk.CTk):
             font=IOS_FONT_SMALL,
             text_color=IOS_COLORS["text_secondary"]
         )
-        self.lbl_browser_status.pack(anchor="w", padx=16, pady=(0, 16))
+        self.lbl_browser_status.pack(anchor="w", padx=20, pady=(0, 20))
 
         # 로그 카드
         log_frame = ctk.CTkFrame(
             self.scrollable_frame,
             fg_color=IOS_COLORS["card"],
-            corner_radius=12
+            corner_radius=16
         )
-        log_frame.grid(row=6, column=0, padx=16, pady=8, sticky="ew")
+        log_frame.grid(row=6, column=0, padx=20, pady=12, sticky="ew")
         log_frame.grid_columnconfigure(0, weight=1)
         
         log_title = ctk.CTkLabel(
@@ -1206,17 +1237,18 @@ class App(ctk.CTk):
             font=IOS_FONT_MEDIUM,
             text_color=IOS_COLORS["text_primary"]
         )
-        log_title.grid(row=0, column=0, sticky="w", padx=16, pady=(16, 12))
+        log_title.grid(row=0, column=0, sticky="w", padx=20, pady=(20, 14))
         
         self.txt_log = ctk.CTkTextbox(
             log_frame,
             state="disabled",
             font=IOS_FONT_MONO,
-            fg_color="#F2F2F7",
+            fg_color=IOS_COLORS["input_bg"],
             text_color=IOS_COLORS["text_primary"],
-            corner_radius=8
+            corner_radius=10,
+            border_width=0
         )
-        self.txt_log.grid(row=1, column=0, padx=16, pady=(0, 16), sticky="nsew")
+        self.txt_log.grid(row=1, column=0, padx=20, pady=(0, 20), sticky="nsew")
         self.log_msg("프로그램 준비 완료.")
 
         # ========== 오른쪽 패널 (브라우저 화면 영역) ==========
@@ -1229,55 +1261,57 @@ class App(ctk.CTk):
         self.right_panel.grid_columnconfigure(0, weight=1)
         self.right_panel.grid_rowconfigure(0, weight=1)
 
-        # 브라우저 화면 안내 (iOS 스타일)
+        # 브라우저 화면 안내 (iOS 스타일) - 넓은 영역
         self.browser_placeholder = ctk.CTkFrame(
             self.right_panel,
             fg_color=IOS_COLORS["card"],
-            corner_radius=20
+            corner_radius=24
         )
-        self.browser_placeholder.grid(row=0, column=0, sticky="nsew", padx=40, pady=40)
+        self.browser_placeholder.grid(row=0, column=0, sticky="nsew", padx=30, pady=30)
         self.browser_placeholder.grid_columnconfigure(0, weight=1)
         self.browser_placeholder.grid_rowconfigure(0, weight=1)
         
-        # 아이콘 영역
-        icon_frame = ctk.CTkFrame(
+        # 중앙 정렬을 위한 컨테이너
+        center_container = ctk.CTkFrame(
             self.browser_placeholder,
             fg_color="transparent",
-            width=80,
-            height=80
+            corner_radius=0
         )
-        icon_frame.pack(pady=(60, 20))
+        center_container.grid(row=0, column=0, sticky="")
         
+        # 아이콘 영역
         icon_label = ctk.CTkLabel(
-            icon_frame,
+            center_container,
             text="🌐",
-            font=("SF Pro Display", 64),
-            width=80,
-            height=80
+            font=("SF Pro Display", 72),
+            width=100,
+            height=100
         )
-        icon_label.pack()
+        icon_label.pack(pady=(50, 24))
         
         self.lbl_browser_placeholder = ctk.CTkLabel(
-            self.browser_placeholder,
+            center_container,
             text="브라우저 화면",
-            font=("SF Pro Display", 24, "bold"),
+            font=("SF Pro Display", 26, "bold"),
             text_color=IOS_COLORS["text_primary"]
         )
-        self.lbl_browser_placeholder.pack(pady=(0, 12))
+        self.lbl_browser_placeholder.pack(pady=(0, 14))
         
         desc_label = ctk.CTkLabel(
-            self.browser_placeholder,
+            center_container,
             text="크롬 창이 이 영역에\n자동으로 배치됩니다",
             font=IOS_FONT_REGULAR,
             text_color=IOS_COLORS["text_secondary"],
             justify="center"
         )
-        desc_label.pack(pady=(0, 60))
+        desc_label.pack(pady=(0, 50))
         
-        # GUI 창 이동 감지하여 크롬 창도 함께 이동
-        self.bind('<Configure>', self._on_window_move)
+        # GUI 창 이동 감지하여 크롬 창도 함께 이동 (throttle 적용)
         self._last_position = None
         self._position_update_thread = None
+        self._last_update_time = 0
+        self._update_throttle = 0.5  # 최대 0.5초에 한 번만 업데이트
+        self.bind('<Configure>', self._on_window_move)
 
     def log_msg(self, msg):
         self.txt_log.configure(state="normal")
@@ -1310,21 +1344,30 @@ class App(ctk.CTk):
             self.browser_placeholder.grid_remove()
     
     def _on_window_move(self, event):
-        """GUI 창 이동 시 크롬 창도 함께 이동"""
+        """GUI 창 이동 시 크롬 창도 함께 이동 (throttle 적용)"""
         if event.widget != self:
             return
         
+        # Throttle: 너무 자주 업데이트하지 않도록 제한
+        current_time = time.time()
+        if current_time - self._last_update_time < self._update_throttle:
+            return
+        
         # 창 위치가 실제로 변경되었는지 확인
-        current_x = self.winfo_x()
-        current_y = self.winfo_y()
+        try:
+            current_x = self.winfo_x()
+            current_y = self.winfo_y()
+        except:
+            return
         
         if self._last_position and self._last_position == (current_x, current_y):
             return
         
         self._last_position = (current_x, current_y)
+        self._last_update_time = current_time
         
         # 크롬 창 위치 업데이트 (쓰레드로 처리하여 GUI 블로킹 방지)
-        if self.logic.driver:
+        if self.logic and self.logic.driver:
             # 쓰레드가 없거나 종료된 경우에만 새로 시작
             if self._position_update_thread is None or not self._position_update_thread.is_alive():
                 self._position_update_thread = threading.Thread(target=self._update_chrome_position, daemon=True)
@@ -1332,12 +1375,46 @@ class App(ctk.CTk):
     
     def _update_chrome_position(self):
         """크롬 창 위치를 GUI 오른쪽에 맞춤"""
-        time.sleep(0.1)  # GUI 업데이트 대기
+        time.sleep(0.2)  # GUI 업데이트 대기 (약간 증가)
         if self.logic.driver:
             try:
                 self.logic._position_chrome_window(self)
             except:
                 pass
+    
+    def _on_mousewheel(self, event):
+        """마우스 휠 이벤트 처리 (스크롤 개선)"""
+        try:
+            # 이벤트가 발생한 위젯이 왼쪽 패널 또는 스크롤 가능한 프레임인지 확인
+            widget = event.widget
+            if widget != self.left_panel and widget != self.scrollable_frame:
+                # 위젯의 부모 체인 확인
+                parent = widget
+                while parent:
+                    if parent == self.left_panel or parent == self.scrollable_frame:
+                        break
+                    try:
+                        parent = parent.master
+                    except:
+                        break
+                else:
+                    return  # 왼쪽 패널과 관련 없는 위젯
+            
+            # 델타 계산
+            if platform.system() == "Darwin":  # macOS
+                delta = event.delta
+            elif event.num == 4:  # Linux 위로
+                delta = 1
+            elif event.num == 5:  # Linux 아래로
+                delta = -1
+            else:  # Windows
+                delta = event.delta // 120
+            
+            # 스크롤 가능한 프레임의 캔버스에 스크롤 적용
+            if hasattr(self.scrollable_frame, '_parent_canvas'):
+                self.scrollable_frame._parent_canvas.yview_scroll(int(-delta), "units")
+        except:
+            pass
 
     def on_login(self):
         uid = self.entry_id.get()
@@ -1346,36 +1423,45 @@ class App(ctk.CTk):
             self.log_msg("⚠️ 아이디/비번을 입력하세요.")
             return
         
+        # 즉시 UI 피드백
         self.btn_login.configure(state="disabled", text="로그인 중...")
+        self.update_idletasks()  # GUI 즉시 업데이트
+        self.log_msg("🔐 로그인 시도 중...")
         threading.Thread(target=self._thread_login, args=(uid, upw), daemon=True).start()
 
     def _thread_login(self, u, p):
         if not self.logic.driver:
             if not self.logic.connect_driver():
-                self.btn_login.configure(state="normal", text="로그인")
+                self.after(0, lambda: self.btn_login.configure(state="normal", text="로그인"))
                 return
         
         if self.logic.login(u, p):
-            self.btn_login.configure(
+            self.after(0, lambda: self.btn_login.configure(
                 state="normal",
                 text="로그인 완료",
                 fg_color=IOS_COLORS["text_secondary"],
                 hover_color=IOS_COLORS["text_secondary"]
-            )
+            ))
         else:
-            self.btn_login.configure(state="normal", text="로그인")
+            self.after(0, lambda: self.btn_login.configure(state="normal", text="로그인"))
 
     def on_search(self):
         k = self.entry_keyword.get()
         if not k:
             self.log_msg("⚠️ 키워드를 입력하세요.")
             return
+        
+        # 즉시 UI 피드백
+        self.btn_search.configure(state="disabled", text="검색 중...")
+        self.update_idletasks()  # GUI 즉시 업데이트
+        self.log_msg(f"🔍 '{k}' 검색 중...")
         threading.Thread(target=self._thread_search, args=(k,), daemon=True).start()
 
     def _thread_search(self, k):
         if not self.logic.driver:
             self.logic.connect_driver()
         self.logic.search_keyword(k)
+        self.after(0, lambda: self.btn_search.configure(state="normal", text="이동"))
 
     def on_start(self):
         if self.logic.is_running:
@@ -1400,15 +1486,35 @@ class App(ctk.CTk):
         if not comment_msg:
             comment_msg = "안녕하세요! 포스팅 잘 보고 갑니다. 좋은 하루 보내세요~"
         
+        # 즉시 UI 피드백
+        self.btn_start.configure(state="disabled", text="시작 중...")
+        self.btn_stop.configure(state="normal")
+        self.update_idletasks()  # GUI 즉시 업데이트
+        self.log_msg(f"🚀 작업 시작: '{keyword}' (목표: {target_count}개)")
         threading.Thread(target=self._thread_start, args=(keyword, target_count, neighbor_msg, comment_msg), daemon=True).start()
 
     def _thread_start(self, keyword, target_count, neighbor_msg, comment_msg):
         self.logic.start_working(keyword, target_count, neighbor_msg, comment_msg)
+        # 작업이 완료되면 버튼 상태 업데이트
+        self.after(0, lambda: self._update_button_state())
+    
+    def _update_button_state(self):
+        """작업 상태에 따라 버튼 상태 업데이트"""
+        if not self.logic.is_running:
+            self.btn_start.configure(state="normal", text="작업 시작")
+            self.btn_stop.configure(state="disabled")
+        else:
+            self.btn_start.configure(state="disabled", text="작업 중...")
+            self.btn_stop.configure(state="normal")
 
     def on_stop(self):
         if self.logic.is_running:
             self.logic.is_running = False
             self.log_msg("🛑 정지 요청됨...")
+            # 즉시 버튼 상태 업데이트
+            self.btn_start.configure(state="normal", text="작업 시작")
+            self.btn_stop.configure(state="disabled")
+            self.update_idletasks()  # GUI 즉시 업데이트
         else:
             self.log_msg("실행 중 아님")
 
