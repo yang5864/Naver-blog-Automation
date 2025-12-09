@@ -1519,5 +1519,22 @@ class App(ctk.CTk):
             self.log_msg("실행 중 아님")
 
 if __name__ == "__main__":
-    app = App()
-    app.mainloop()
+    import sys
+    import warnings
+    # macOS 26.1 Tcl/Tk 호환성 경고 무시
+    warnings.filterwarnings("ignore")
+    # stderr를 리다이렉트하여 bootloader 에러 메시지 숨기기
+    import os
+    devnull = open(os.devnull, 'w')
+    sys.stderr = devnull
+    
+    try:
+        app = App()
+        app.mainloop()
+    except Exception as e:
+        # 에러 발생 시 원래 stderr로 복원하여 실제 에러 표시
+        sys.stderr = sys.__stderr__
+        print(f"에러 발생: {e}")
+        import traceback
+        traceback.print_exc()
+        raise

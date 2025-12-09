@@ -1,32 +1,49 @@
-# --- [실행 파일 및 빌드 관련] ---
-*.exe
-서이추1.0.exe
-build/
-dist/
-*.spec
-
-# --- [민감한 정보 및 데이터 폴더] ---
-# 크롬 자동화 로그인 정보가 저장되는 폴더들
-ChromeBotData/
-ChromeTemp/
-UserData/
-profile/
-storage/
-state.json
-
-# --- [파이썬 자동 생성 파일] ---
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
 
-# --- [로그 파일] ---
+# PyInstaller
+build/
+dist/
+*.spec
+*.app
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Chrome data
+~/ChromeBotData/
+~/ChromeTEMP/
+
+# Logs
 *.log
 wine.log
 
-# --- [에디터/IDE 임시 파일] ---
-tempCodeRunnerFile.py
-.vscode/
-.idea/
+# Storage
+storage/
+*.json
 
-# --- [Mac/OS 관련] ---
-.DS_Store
+# Temporary files
+tempCodeRunnerFile.py
+*.exe
+venv_backup_*
