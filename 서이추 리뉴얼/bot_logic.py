@@ -5,7 +5,7 @@ import os
 import subprocess
 import platform
 import socket
-import tempfile
+
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -41,7 +41,6 @@ class NaverBotLogic:
         self._embedded_chrome_hwnd = None
         self._embed_parent_hwnd = None
         self._chrome_process_id = None
-        self._runtime_debug_port = None
         self._chrome_user_data_dir = None
         self._embed_attempt_count = 0
 
@@ -150,70 +149,18 @@ class NaverBotLogic:
         except OSError:
             return False
 
-    def _find_free_local_port(self):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("127.0.0.1", 0))
-            return int(s.getsockname()[1])
-
     def _get_debug_port(self):
-        if self._runtime_debug_port:
-            return int(self._runtime_debug_port)
-
-        preferred = int(self.config.get("chrome_debug_port") or 9222)
-        if self._is_windows and self.embed_browser_windows:
-            if self._is_debug_port_open(preferred):
-                self._runtime_debug_port = self._find_free_local_port()
-            else:
-                self._runtime_debug_port = preferred
-            return int(self._runtime_debug_port)
-
-        return preferred
+        return int(self.config.get("chrome_debug_port") or 9222)
 
     def _get_chrome_user_data_dir(self):
         if self._chrome_user_data_dir:
             return self._chrome_user_data_dir
-
-        if self._is_windows and self.embed_browser_windows:
-            # 기존 Chrome 인스턴스와 충돌하지 않게 세션별 프로필 사용
-            self._chrome_user_data_dir = tempfile.mkdtemp(prefix="SeoiChuChrome_")
-        else:
-            self._chrome_user_data_dir = os.path.expanduser("~/ChromeBotData")
-            os.makedirs(self._chrome_user_data_dir, exist_ok=True)
+        self._chrome_user_data_dir = os.path.expanduser("~/ChromeBotData")
+        os.makedirs(self._chrome_user_data_dir, exist_ok=True)
         return self._chrome_user_data_dir
 
     def _is_chrome_widget_window_class(self, class_name):
         return str(class_name).startswith("Chrome_WidgetWin_")
-
-    def _resolve_chrome_pid_windows(self, debug_port, user_data_dir, fallback_pid=None):
-        if not self._is_windows:
-            return int(fallback_pid or 0)
-
-        # Win32 PID 확인: command line에서 debug port + user-data-dir가 일치하는 chrome.exe 찾기
-        port_arg = f"--remote-debugging-port={int(debug_port)}"
-        profile_arg = f"--user-data-dir={user_data_dir}"
-        profile_arg_ps = profile_arg.replace("'", "''")
-        cmd = (
-            "$p = Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
-            f"Where-Object {{ $_.CommandLine -like '*{port_arg}*' -and $_.CommandLine -like '*{profile_arg_ps}*' }} | "
-            "Select-Object -ExpandProperty ProcessId; "
-            "if ($p) { $p | Select-Object -First 1 }"
-        )
-
-        for _ in range(10):
-            try:
-                out = subprocess.check_output(
-                    ["powershell", "-NoProfile", "-Command", cmd],
-                    stderr=subprocess.DEVNULL,
-                    text=True,
-                ).strip()
-                if out:
-                    pid = int(str(out).splitlines()[-1].strip())
-                    if pid > 0:
-                        return pid
-            except Exception:
-                pass
-            time.sleep(0.2)
-        return int(fallback_pid or 0)
 
     def _launch_chrome_process(self, debug_port, initial_url=None):
         user_data_dir = self._get_chrome_user_data_dir()
@@ -235,7 +182,6 @@ class NaverBotLogic:
             f"--user-data-dir={user_data_dir}",
             "--no-first-run",
             "--no-default-browser-check",
-            "--new-window",
             f"--window-size={chrome_width},{chrome_height}",
             f"--window-position={chrome_x},{chrome_y}",
         ]
@@ -244,9 +190,6 @@ class NaverBotLogic:
 
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self._chrome_process_id = proc.pid
-        if self._is_windows and self.embed_browser_windows:
-            self._chrome_process_id = self._resolve_chrome_pid_windows(debug_port, user_data_dir, fallback_pid=proc.pid)
-            self.log(f"   ↪ Chrome PID: {int(self._chrome_process_id)}")
         return True
 
     def connect_driver(self, force_restart=False, initial_url=None):
@@ -265,15 +208,19 @@ class NaverBotLogic:
 
         self.log("🖥️ 크롬 브라우저 실행 중...")
         try:
-            if self._is_windows and self.embed_browser_windows:
-                self.log(f"   ↪ 임베드 세션 포트: {debug_port}")
-            # 세션 전용 포트가 닫혀있으면 우리가 관리하는 Chrome 프로세스를 실행
+            # 포트가 닫혀있으면 크롬 프로세스 실행
             if not self._is_debug_port_open(debug_port):
                 self._launch_chrome_process(debug_port, initial_url=initial_url)
 
+            # 디버그 포트가 실제로 열릴 때까지 대기 (최대 15초)
+            for _ in range(30):
+                if self._is_debug_port_open(debug_port):
+                    break
+                time.sleep(0.5)
+
             # 디버그 포트 준비 후 attach
             self.driver = None
-            for _ in range(40):
+            for _ in range(20):
                 try:
                     chrome_options = Options()
                     chrome_options.add_experimental_option("debuggerAddress", f"127.0.0.1:{debug_port}")
@@ -283,7 +230,7 @@ class NaverBotLogic:
                     self.driver = webdriver.Chrome(options=chrome_options)
                     break
                 except WebDriverException:
-                    time.sleep(0.1)
+                    time.sleep(0.5)
 
             if not self.driver:
                 raise RuntimeError("크롬 디버그 포트 연결 실패")
@@ -513,7 +460,6 @@ class NaverBotLogic:
             return None
 
         rect = (expected_x, expected_y, expected_x + expected_width, expected_y + expected_height)
-        target_pid = int(self._chrome_process_id or 0)
         found = {"hwnd": None, "score": 10**9}
         GW_OWNER = 4
 
@@ -529,9 +475,6 @@ class NaverBotLogic:
             if user32.GetParent(hwnd) != 0:
                 return True
 
-            pid = wintypes.DWORD()
-            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-
             rc = wintypes.RECT()
             if not user32.GetWindowRect(hwnd, ctypes.byref(rc)):
                 return True
@@ -542,10 +485,6 @@ class NaverBotLogic:
                 score += 2000
             if user32.GetWindow(hwnd, GW_OWNER) != 0:
                 score += 1500
-            if target_pid and pid.value == target_pid:
-                score -= 10000
-            elif target_pid:
-                score += 4000
             if score < found["score"]:
                 found["score"] = score
                 found["hwnd"] = hwnd
@@ -566,7 +505,6 @@ class NaverBotLogic:
             import ctypes
             from ctypes import wintypes
             user32 = ctypes.windll.user32
-            target_pid = int(self._chrome_process_id or 0)
 
             EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
             def _show_callback(hwnd, _lparam):
@@ -574,11 +512,6 @@ class NaverBotLogic:
                 user32.GetClassNameW(hwnd, class_name, 256)
                 if not self._is_chrome_widget_window_class(class_name.value) or user32.GetParent(hwnd) != 0:
                     return True
-                if target_pid:
-                    pid = wintypes.DWORD()
-                    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                    if pid.value != target_pid:
-                        return True
                 user32.ShowWindow(hwnd, 5)  # SW_SHOW
                 return True
             user32.EnumWindows(EnumWindowsProc(_show_callback), 0)
