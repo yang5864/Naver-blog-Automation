@@ -204,10 +204,17 @@ class WebView2PanelHost:
         if not self._controller:
             return
         try:
+            bx, by, bw, bh = self._bounds
             rect = self._get_parent_client_rect()
             if rect is None:
-                bx, by, bw, bh = self._bounds
                 rect = RECT(int(bx), int(by), int(bx + bw), int(by + bh))
+            else:
+                client_w = max(1, int(rect.right - rect.left))
+                client_h = max(1, int(rect.bottom - rect.top))
+                # DPI 가상화로 client rect가 작게 들어오는 환경을 보정
+                final_w = max(client_w, int(bw))
+                final_h = max(client_h, int(bh))
+                rect = RECT(0, 0, final_w, final_h)
             self._controller.put_Bounds(rect)
         except Exception as exc:
             self._set_error(f"리사이즈 실패: {exc}")

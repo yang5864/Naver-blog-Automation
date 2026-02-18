@@ -35,6 +35,7 @@ class App(ctk.CTk):
         self.webview2_host = None
         self._webview2_ready = False
         self._webview2_poll_count = 0
+        self._webview2_settle_remaining = 0
 
         # 부드러운 스크롤 상태
         self._scroll_velocity = 0.0
@@ -501,6 +502,8 @@ class App(ctk.CTk):
                 self.browser_center_container.grid_remove()
                 self.update_browser_status("WebView2 연결됨", "green")
                 self.log_msg("🧩 WebView2 내장 브라우저 모드 활성화")
+                self._webview2_settle_remaining = 20
+                self.after(80, self._settle_webview2_bounds)
             self._resize_webview2_panel()
             return
         if self._webview2_poll_count < 120:
@@ -515,6 +518,15 @@ class App(ctk.CTk):
             return
         x, y, w, h = self.get_browser_embed_client_rect()
         self.webview2_host.resize(x, y, w, h)
+
+    def _settle_webview2_bounds(self):
+        if not (self.use_webview2_panel and self.webview2_host and self.webview2_host.is_ready):
+            return
+        self._cache_browser_embed_metrics(force_update=True)
+        self._resize_webview2_panel()
+        self._webview2_settle_remaining -= 1
+        if self._webview2_settle_remaining > 0:
+            self.after(120, self._settle_webview2_bounds)
 
     def _on_close(self):
         try:
