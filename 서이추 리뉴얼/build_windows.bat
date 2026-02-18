@@ -19,8 +19,8 @@ echo [INFO] Closing running SeoiChuPro if exists...
 taskkill /F /IM SeoiChuPro.exe >nul 2>nul
 timeout /t 1 /nobreak >nul
 
-if exist dist\SeoiChuPro rmdir /s /q dist\SeoiChuPro >nul 2>nul
-if exist build\SeoiChuPro rmdir /s /q build\SeoiChuPro >nul 2>nul
+set "DIST_OUT=dist_run_%RANDOM%_%RANDOM%"
+set "WORK_OUT=build_run_%RANDOM%_%RANDOM%"
 
 call :RUN_BUILD
 
@@ -28,8 +28,8 @@ if errorlevel 1 (
   echo [WARN] First build failed. Retrying once after cleanup...
   taskkill /F /IM SeoiChuPro.exe >nul 2>nul
   timeout /t 1 /nobreak >nul
-  if exist dist\SeoiChuPro rmdir /s /q dist\SeoiChuPro >nul 2>nul
-  if exist build\SeoiChuPro rmdir /s /q build\SeoiChuPro >nul 2>nul
+  set "DIST_OUT=dist_run_%RANDOM%_%RANDOM%"
+  set "WORK_OUT=build_run_%RANDOM%_%RANDOM%"
   call :RUN_BUILD
   if errorlevel 1 (
     echo.
@@ -39,7 +39,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [DONE] Build finished: dist\SeoiChuPro\SeoiChuPro.exe
+echo [DONE] Build finished: %DIST_OUT%\SeoiChuPro\SeoiChuPro.exe
 endlocal
 exit /b 0
 
@@ -49,6 +49,8 @@ if exist fonts (
     --noconfirm ^
     --clean ^
     --windowed ^
+    --distpath "%DIST_OUT%" ^
+    --workpath "%WORK_OUT%" ^
     --name "SeoiChuPro" ^
     --add-data "config.json;." ^
     --add-data "fonts;fonts" ^
@@ -58,6 +60,8 @@ if exist fonts (
     --noconfirm ^
     --clean ^
     --windowed ^
+    --distpath "%DIST_OUT%" ^
+    --workpath "%WORK_OUT%" ^
     --name "SeoiChuPro" ^
     --add-data "config.json;." ^
     main.py
