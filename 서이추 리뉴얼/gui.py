@@ -371,7 +371,10 @@ class App(ctk.CTk):
         self.lbl_browser_status.configure(text=f"브라우저: {status}", text_color=status_color)
         if "연결됨" in status or "완료" in status:
             if self.embed_browser_windows:
-                self.browser_center_container.grid_remove()
+                if hasattr(self.logic, "is_chrome_embedded") and self.logic.is_chrome_embedded():
+                    self.browser_center_container.grid_remove()
+                else:
+                    self.browser_center_container.grid()
             else:
                 self.browser_placeholder.grid_remove()
 

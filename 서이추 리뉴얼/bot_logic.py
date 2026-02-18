@@ -166,12 +166,8 @@ class NaverBotLogic:
             "--no-first-run",
             "--no-default-browser-check",
             f"--window-size={chrome_width},{chrome_height}",
+            f"--window-position={chrome_x},{chrome_y}",
         ]
-        if self._is_windows and self.embed_browser_windows:
-            # 임베드 전 외부 창 노출을 줄이기 위해 오프스크린에서 시작
-            cmd.append("--window-position=-32000,-32000")
-        else:
-            cmd.append(f"--window-position={chrome_x},{chrome_y}")
         if initial_url:
             cmd.append(initial_url)
 
@@ -248,6 +244,9 @@ class NaverBotLogic:
         except WebDriverException as e:
             self.log(f"⚠️ 창 위치 조정 실패: {str(e)[:30]}")
 
+    def is_chrome_embedded(self):
+        return bool(self._is_windows and self.embed_browser_windows and self._embedded_chrome_hwnd)
+
     def _get_browser_bounds(self, gui_window):
         if hasattr(gui_window, "get_browser_embed_rect"):
             rx, ry, rw, rh = gui_window.get_browser_embed_rect()
@@ -309,6 +308,7 @@ class NaverBotLogic:
         SWP_SHOWWINDOW = 0x0040
         SW_HIDE = 0
         SW_SHOW = 5
+        SW_RESTORE = 9
 
         if not self._embedded_chrome_hwnd:
             hwnd = self._find_chrome_hwnd(user32, chrome_x, chrome_y, chrome_width, chrome_height)
@@ -359,6 +359,13 @@ class NaverBotLogic:
             width = max(1, int(chrome_width))
             height = max(1, int(chrome_height))
 
+        # 초기 레이아웃 타이밍 이슈로 1px로 고정되는 문제 방지
+        if width < 80 or height < 80:
+            pos_x = 0
+            pos_y = 0
+            width = max(300, int(chrome_width))
+            height = max(300, int(chrome_height))
+
         user32.SetWindowPos(
             self._embedded_chrome_hwnd,
             0,
@@ -366,8 +373,9 @@ class NaverBotLogic:
             pos_y,
             width,
             height,
-            SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
+            SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
         )
+        user32.ShowWindow(self._embedded_chrome_hwnd, SW_RESTORE)
         user32.ShowWindow(self._embedded_chrome_hwnd, SW_SHOW)
         return True
 
@@ -381,10 +389,16 @@ class NaverBotLogic:
         rect = (expected_x, expected_y, expected_x + expected_width, expected_y + expected_height)
         target_pid = int(self._chrome_process_id or 0)
         found = {"hwnd": None, "score": 10**9}
+        GW_OWNER = 4
 
         EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
         def _callback(hwnd, _lparam):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            if user32.GetWindow(hwnd, GW_OWNER) != 0:
+                return True
+
             class_name = ctypes.create_unicode_buffer(256)
             user32.GetClassNameW(hwnd, class_name, 256)
             if class_name.value != "Chrome_WidgetWin_1":
