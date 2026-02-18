@@ -291,6 +291,7 @@ class App(ctk.CTk):
             highlightthickness=0,
         )
         self.browser_native_host.place(x=0, y=0, relwidth=1, relheight=1)
+        self.browser_native_host.bind("<Configure>", self._on_browser_host_configure, add="+")
 
         self.browser_center_container = ctk.CTkFrame(self.browser_placeholder, fg_color="transparent", corner_radius=0)
         self.browser_center_container.grid(row=0, column=0, sticky="")
@@ -511,6 +512,12 @@ class App(ctk.CTk):
             return
         x, y, w, h = self.get_browser_embed_client_rect()
         self.webview2_host.resize(x, y, w, h)
+
+    def _on_browser_host_configure(self, _event=None):
+        if not (self.use_webview2_panel and self.webview2_host):
+            return
+        self._cache_browser_embed_metrics()
+        self._resize_webview2_panel()
 
     def _on_close(self):
         try:

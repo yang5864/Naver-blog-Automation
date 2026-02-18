@@ -204,8 +204,10 @@ class WebView2PanelHost:
         if not self._controller:
             return
         try:
-            bx, by, bw, bh = self._bounds
-            rect = RECT(int(bx), int(by), int(bx + bw), int(by + bh))
+            rect = self._get_parent_client_rect()
+            if rect is None:
+                bx, by, bw, bh = self._bounds
+                rect = RECT(int(bx), int(by), int(bx + bw), int(by + bh))
             self._controller.put_Bounds(rect)
             self._controller.put_IsVisible(1)
         except Exception as exc:
@@ -231,6 +233,21 @@ class WebView2PanelHost:
         self._webview = None
         self._env = None
         self._ready = False
+
+    def _get_parent_client_rect(self):
+        if not self._parent_hwnd:
+            return None
+        try:
+            user32 = ctypes.windll.user32
+            rc = RECT()
+            ok = user32.GetClientRect(wintypes.HWND(self._parent_hwnd), ctypes.byref(rc))
+            if not ok:
+                return None
+            w = max(1, int(rc.right - rc.left))
+            h = max(1, int(rc.bottom - rc.top))
+            return RECT(0, 0, w, h)
+        except Exception:
+            return None
 
     def _on_environment_completed(self, error_code, created_environment):
         if error_code != 0 or not created_environment:
