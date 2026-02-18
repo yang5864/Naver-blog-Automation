@@ -209,7 +209,6 @@ class WebView2PanelHost:
                 bx, by, bw, bh = self._bounds
                 rect = RECT(int(bx), int(by), int(bx + bw), int(by + bh))
             self._controller.put_Bounds(rect)
-            self._controller.put_IsVisible(1)
         except Exception as exc:
             self._set_error(f"리사이즈 실패: {exc}")
 
@@ -282,6 +281,7 @@ class WebView2PanelHost:
         self._log_info("컨트롤러 생성 완료")
 
         try:
+            self._controller.put_IsVisible(1)
             self.resize(*self._bounds)
             self._webview = self._controller.get_CoreWebView2()
             if self._initial_url:
