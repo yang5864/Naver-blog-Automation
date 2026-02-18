@@ -150,6 +150,9 @@ class NaverBotLogic:
         user_data_dir = os.path.expanduser("~/ChromeBotData")
         chrome_path = AppConfig.get_chrome_path()
 
+        self._embedded_chrome_hwnd = None
+        self._embed_parent_hwnd = None
+
         if self.gui_window:
             chrome_x, chrome_y, chrome_width, chrome_height = self._get_browser_bounds(self.gui_window)
         else:
@@ -163,8 +166,12 @@ class NaverBotLogic:
             "--no-first-run",
             "--no-default-browser-check",
             f"--window-size={chrome_width},{chrome_height}",
-            f"--window-position={chrome_x},{chrome_y}",
         ]
+        if self._is_windows and self.embed_browser_windows:
+            # 임베드 전 외부 창 노출을 줄이기 위해 오프스크린에서 시작
+            cmd.append("--window-position=-32000,-32000")
+        else:
+            cmd.append(f"--window-position={chrome_x},{chrome_y}")
         if initial_url:
             cmd.append(initial_url)
 
@@ -266,7 +273,6 @@ class NaverBotLogic:
             return False
         try:
             import ctypes
-            from ctypes import wintypes
         except Exception:
             return False
 
@@ -283,6 +289,7 @@ class NaverBotLogic:
 
         user32 = ctypes.windll.user32
         GWL_STYLE = -16
+        GWL_EXSTYLE = -20
         WS_CHILD = 0x40000000
         WS_POPUP = 0x80000000
         WS_CAPTION = 0x00C00000
@@ -290,9 +297,16 @@ class NaverBotLogic:
         WS_MINIMIZEBOX = 0x00020000
         WS_MAXIMIZEBOX = 0x00010000
         WS_SYSMENU = 0x00080000
+        WS_VISIBLE = 0x10000000
+        WS_EX_TOOLWINDOW = 0x00000080
+        WS_EX_APPWINDOW = 0x00040000
+        WS_EX_WINDOWEDGE = 0x00000100
+        WS_EX_CLIENTEDGE = 0x00000200
+        WS_EX_STATICEDGE = 0x00020000
         SWP_NOZORDER = 0x0004
         SWP_NOACTIVATE = 0x0010
         SWP_FRAMECHANGED = 0x0020
+        SWP_SHOWWINDOW = 0x0040
         SW_HIDE = 0
         SW_SHOW = 5
 
@@ -307,9 +321,12 @@ class NaverBotLogic:
             user32.ShowWindow(hwnd, SW_HIDE)
 
             style = user32.GetWindowLongW(hwnd, GWL_STYLE)
-            style = (style | WS_CHILD) & ~WS_POPUP
+            style = (style | WS_CHILD | WS_VISIBLE) & ~WS_POPUP
             style = style & ~WS_CAPTION & ~WS_THICKFRAME & ~WS_MINIMIZEBOX & ~WS_MAXIMIZEBOX & ~WS_SYSMENU
             user32.SetWindowLongW(hwnd, GWL_STYLE, style)
+            ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            ex_style = (ex_style | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW & ~WS_EX_WINDOWEDGE & ~WS_EX_CLIENTEDGE & ~WS_EX_STATICEDGE
+            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style)
             user32.SetParent(hwnd, target_hwnd)
             if user32.GetParent(hwnd) != target_hwnd:
                 self.log("⚠️ 임베드 실패: SetParent 호출 실패")
@@ -330,20 +347,17 @@ class NaverBotLogic:
                 return False
             self._embed_parent_hwnd = target_hwnd
 
-        user32.ShowWindow(self._embedded_chrome_hwnd, SW_SHOW)
         if embed_client_rect:
             x, y, w, h = embed_client_rect
-            inset = 6
-            pos_x = max(0, int(x) + inset)
-            pos_y = max(0, int(y) + inset)
-            width = max(100, int(w) - (inset * 2))
-            height = max(100, int(h) - (inset * 2))
+            pos_x = max(0, int(x))
+            pos_y = max(0, int(y))
+            width = max(1, int(w))
+            height = max(1, int(h))
         else:
-            inset = 6
-            pos_x = inset
-            pos_y = inset
-            width = max(100, int(chrome_width) - (inset * 2))
-            height = max(100, int(chrome_height) - (inset * 2))
+            pos_x = 0
+            pos_y = 0
+            width = max(1, int(chrome_width))
+            height = max(1, int(chrome_height))
 
         user32.SetWindowPos(
             self._embedded_chrome_hwnd,
@@ -352,8 +366,9 @@ class NaverBotLogic:
             pos_y,
             width,
             height,
-            SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
         )
+        user32.ShowWindow(self._embedded_chrome_hwnd, SW_SHOW)
         return True
 
     def _find_chrome_hwnd(self, user32, expected_x, expected_y, expected_width, expected_height):
@@ -364,14 +379,12 @@ class NaverBotLogic:
             return None
 
         rect = (expected_x, expected_y, expected_x + expected_width, expected_y + expected_height)
+        target_pid = int(self._chrome_process_id or 0)
         found = {"hwnd": None, "score": 10**9}
 
         EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
         def _callback(hwnd, _lparam):
-            if not user32.IsWindowVisible(hwnd):
-                return True
-
             class_name = ctypes.create_unicode_buffer(256)
             user32.GetClassNameW(hwnd, class_name, 256)
             if class_name.value != "Chrome_WidgetWin_1":
@@ -381,12 +394,19 @@ class NaverBotLogic:
             if user32.GetParent(hwnd) != 0:
                 return True
 
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if target_pid and pid.value != target_pid:
+                return True
+
             rc = wintypes.RECT()
             if not user32.GetWindowRect(hwnd, ctypes.byref(rc)):
                 return True
 
             # 예상 위치와 가까운 창 우선 선택
             score = abs(rc.left - rect[0]) + abs(rc.top - rect[1])
+            if target_pid and pid.value == target_pid:
+                score -= 10000
             if score < found["score"]:
                 found["score"] = score
                 found["hwnd"] = hwnd
@@ -407,13 +427,20 @@ class NaverBotLogic:
             import ctypes
             from ctypes import wintypes
             user32 = ctypes.windll.user32
+            target_pid = int(self._chrome_process_id or 0)
 
             EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
             def _show_callback(hwnd, _lparam):
                 class_name = ctypes.create_unicode_buffer(256)
                 user32.GetClassNameW(hwnd, class_name, 256)
-                if class_name.value == "Chrome_WidgetWin_1" and user32.GetParent(hwnd) == 0:
-                    user32.ShowWindow(hwnd, 5)  # SW_SHOW
+                if class_name.value != "Chrome_WidgetWin_1" or user32.GetParent(hwnd) != 0:
+                    return True
+                if target_pid:
+                    pid = wintypes.DWORD()
+                    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                    if pid.value != target_pid:
+                        return True
+                user32.ShowWindow(hwnd, 5)  # SW_SHOW
                 return True
             user32.EnumWindows(EnumWindowsProc(_show_callback), 0)
         except Exception:

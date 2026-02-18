@@ -412,8 +412,8 @@ class App(ctk.CTk):
         self._browser_embed_client_rect = (
             0,
             0,
-            max(100, placeholder_w),
-            max(100, placeholder_h),
+            max(1, placeholder_w),
+            max(1, placeholder_h),
         )
 
     def _auto_open_login_page(self):
