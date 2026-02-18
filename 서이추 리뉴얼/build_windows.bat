@@ -15,6 +15,35 @@ if not exist config.json (
   python -c "import pathlib; pathlib.Path('config.json').write_text('{}\n', encoding='utf-8')"
 )
 
+echo [INFO] Closing running SeoiChuPro if exists...
+taskkill /F /IM SeoiChuPro.exe >nul 2>nul
+timeout /t 1 /nobreak >nul
+
+if exist dist\SeoiChuPro rmdir /s /q dist\SeoiChuPro >nul 2>nul
+if exist build\SeoiChuPro rmdir /s /q build\SeoiChuPro >nul 2>nul
+
+call :RUN_BUILD
+
+if errorlevel 1 (
+  echo [WARN] First build failed. Retrying once after cleanup...
+  taskkill /F /IM SeoiChuPro.exe >nul 2>nul
+  timeout /t 1 /nobreak >nul
+  if exist dist\SeoiChuPro rmdir /s /q dist\SeoiChuPro >nul 2>nul
+  if exist build\SeoiChuPro rmdir /s /q build\SeoiChuPro >nul 2>nul
+  call :RUN_BUILD
+  if errorlevel 1 (
+    echo.
+    echo [ERROR] Build failed. Check log above.
+    exit /b 1
+  )
+)
+
+echo.
+echo [DONE] Build finished: dist\SeoiChuPro\SeoiChuPro.exe
+endlocal
+exit /b 0
+
+:RUN_BUILD
 if exist fonts (
   pyinstaller ^
     --noconfirm ^
@@ -33,13 +62,4 @@ if exist fonts (
     --add-data "config.json;." ^
     main.py
 )
-
-if errorlevel 1 (
-  echo.
-  echo [ERROR] Build failed. Check log above.
-  exit /b 1
-)
-
-echo.
-echo [DONE] Build finished: dist\SeoiChuPro\SeoiChuPro.exe
-endlocal
+exit /b %errorlevel%
