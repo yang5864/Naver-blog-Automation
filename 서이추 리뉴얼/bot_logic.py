@@ -211,9 +211,37 @@ class NaverBotLogic:
             except Exception:
                 continue
 
-    def _attach_debugger_driver(self, debug_port):
+    def _extract_edge_major(self, browser_name):
+        try:
+            text = str(browser_name or "")
+            match = re.search(r"Edg/(\d+)\.", text)
+            if match:
+                return int(match.group(1))
+        except Exception:
+            pass
+        return None
+
+    def _detect_driver_major(self, driver_path):
+        try:
+            proc = subprocess.run(
+                [driver_path, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+                check=False,
+            )
+            output = f"{proc.stdout}\n{proc.stderr}"
+            match = re.search(r"(\d+)\.", output)
+            if match:
+                return int(match.group(1))
+        except Exception:
+            pass
+        return None
+
+    def _attach_debugger_driver(self, debug_port, browser_name=None):
         debugger_address = f"127.0.0.1:{int(debug_port)}"
         errors = []
+        edge_major = self._extract_edge_major(browser_name)
 
         def _edge_options():
             from selenium.webdriver.edge.options import Options as EdgeOptions
@@ -223,72 +251,52 @@ class NaverBotLogic:
             opts.add_experimental_option("debuggerAddress", debugger_address)
             return opts
 
-        def _chrome_options():
-            opts = Options()
-            opts.add_experimental_option("debuggerAddress", debugger_address)
-            return opts
-
         try:
             driver = webdriver.Edge(options=_edge_options())
             self.log("   ↪ msedgedriver attach 성공")
             return driver
         except Exception as exc:
-            errors.append(f"Edge(default): {str(exc)[:140]}")
+            errors.append(f"Edge(default): {str(exc)[:260]}")
 
         try:
             from selenium.webdriver.edge.service import Service as EdgeService
 
             for path in self._candidate_driver_paths("msedgedriver.exe"):
                 try:
+                    driver_major = self._detect_driver_major(path)
+                    if edge_major and driver_major and driver_major != edge_major:
+                        errors.append(
+                            f"Edge(local:{os.path.basename(path)}): version mismatch driver={driver_major}, edge={edge_major}"
+                        )
+                        continue
                     driver = webdriver.Edge(service=EdgeService(executable_path=path), options=_edge_options())
                     self.log(f"   ↪ msedgedriver(local) attach 성공: {path}")
                     return driver
                 except Exception as exc:
-                    errors.append(f"Edge(local:{os.path.basename(path)}): {str(exc)[:140]}")
+                    errors.append(f"Edge(local:{os.path.basename(path)}): {str(exc)[:260]}")
         except Exception as exc:
-            errors.append(f"Edge(service-import): {str(exc)[:140]}")
-
-        try:
-            driver = webdriver.Chrome(options=_chrome_options())
-            self.log("   ↪ chromedriver attach 성공")
-            return driver
-        except Exception as exc:
-            errors.append(f"Chrome(default): {str(exc)[:140]}")
-
-        try:
-            from selenium.webdriver.chrome.service import Service as ChromeService
-
-            for path in self._candidate_driver_paths("chromedriver.exe"):
-                try:
-                    driver = webdriver.Chrome(service=ChromeService(executable_path=path), options=_chrome_options())
-                    self.log(f"   ↪ chromedriver(local) attach 성공: {path}")
-                    return driver
-                except Exception as exc:
-                    errors.append(f"Chrome(local:{os.path.basename(path)}): {str(exc)[:140]}")
-        except Exception as exc:
-            errors.append(f"Chrome(service-import): {str(exc)[:140]}")
+            errors.append(f"Edge(service-import): {str(exc)[:260]}")
 
         try:
             from selenium.webdriver.edge.service import Service as EdgeService
             from webdriver_manager.microsoft import EdgeChromiumDriverManager
 
-            driver_path = EdgeChromiumDriverManager().install()
+            driver_path = None
+            if edge_major:
+                version_hint = f"{edge_major}.0.0.0"
+                try:
+                    driver_path = EdgeChromiumDriverManager(driver_version=version_hint).install()
+                except TypeError:
+                    driver_path = EdgeChromiumDriverManager(version=version_hint).install()
+                except Exception:
+                    driver_path = None
+            if not driver_path:
+                driver_path = EdgeChromiumDriverManager().install()
             driver = webdriver.Edge(service=EdgeService(executable_path=driver_path), options=_edge_options())
             self.log("   ↪ msedgedriver(manager) attach 성공")
             return driver
         except Exception as exc:
-            errors.append(f"Edge(manager): {str(exc)[:140]}")
-
-        try:
-            from selenium.webdriver.chrome.service import Service as ChromeService
-            from webdriver_manager.chrome import ChromeDriverManager
-
-            driver_path = ChromeDriverManager().install()
-            driver = webdriver.Chrome(service=ChromeService(executable_path=driver_path), options=_chrome_options())
-            self.log("   ↪ chromedriver(manager) attach 성공")
-            return driver
-        except Exception as exc:
-            errors.append(f"Chrome(manager): {str(exc)[:140]}")
+            errors.append(f"Edge(manager): {str(exc)[:260]}")
 
         self._last_attach_errors = errors
         return None
@@ -322,11 +330,16 @@ class NaverBotLogic:
         self.log(f"   ↪ DevTools browser: {browser_name}")
 
         self.log(f"🌐 WebView2 자동화 연결 시도: {debug_port}")
-        self.driver = self._attach_debugger_driver(debug_port)
+        self.driver = self._attach_debugger_driver(debug_port, browser_name=browser_name)
         if not self.driver:
             self.log("❌ WebView2 자동화 연결 실패 (드라이버 attach 실패)")
             for err in self._last_attach_errors[:6]:
                 self.log(f"   ↪ {err}")
+            edge_major = self._extract_edge_major(browser_name)
+            if edge_major:
+                self.log(
+                    f"   ↪ 해결: msedgedriver {edge_major}.x 버전을 exe 폴더에 두고 다시 실행"
+                )
             return False
 
         try:
