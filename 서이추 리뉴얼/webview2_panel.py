@@ -268,6 +268,7 @@ class WebView2PanelHost:
             self.resize(*self._bounds)
             self._webview = self._controller.get_CoreWebView2()
             if self._initial_url:
+                self._log_info(f"Navigate 요청: {self._initial_url}")
                 self._webview.Navigate(self._initial_url)
             self._ready = True
             self._log_info("패널 연결 완료")
@@ -372,42 +373,10 @@ if IS_WINDOWS and COMTYPES_AVAILABLE:
 
 
     ICoreWebView2._methods_ = [
-        COMMETHOD([], HRESULT, "add_NavigationStarting", (["in"], ctypes.c_void_p, "eventHandler"), (["out"], POINTER(EventRegistrationToken), "token")),
-        COMMETHOD([], HRESULT, "remove_NavigationStarting", (["in"], EventRegistrationToken, "token")),
-        COMMETHOD([], HRESULT, "add_ContentLoading", (["in"], ctypes.c_void_p, "eventHandler"), (["out"], POINTER(EventRegistrationToken), "token")),
-        COMMETHOD([], HRESULT, "remove_ContentLoading", (["in"], EventRegistrationToken, "token")),
-        COMMETHOD([], HRESULT, "add_SourceChanged", (["in"], ctypes.c_void_p, "eventHandler"), (["out"], POINTER(EventRegistrationToken), "token")),
-        COMMETHOD([], HRESULT, "remove_SourceChanged", (["in"], EventRegistrationToken, "token")),
-        COMMETHOD([], HRESULT, "add_HistoryChanged", (["in"], ctypes.c_void_p, "eventHandler"), (["out"], POINTER(EventRegistrationToken), "token")),
-        COMMETHOD([], HRESULT, "remove_HistoryChanged", (["in"], EventRegistrationToken, "token")),
-        COMMETHOD([], HRESULT, "add_NavigationCompleted", (["in"], ctypes.c_void_p, "eventHandler"), (["out"], POINTER(EventRegistrationToken), "token")),
-        COMMETHOD([], HRESULT, "remove_NavigationCompleted", (["in"], EventRegistrationToken, "token")),
-        COMMETHOD([], HRESULT, "add_FrameNavigationStarting", (["in"], ctypes.c_void_p, "eventHandler"), (["out"], POINTER(EventRegistrationToken), "token")),
-        COMMETHOD([], HRESULT, "remove_FrameNavigationStarting", (["in"], EventRegistrationToken, "token")),
-        COMMETHOD([], HRESULT, "add_FrameNavigationCompleted", (["in"], ctypes.c_void_p, "eventHandler"), (["out"], POINTER(EventRegistrationToken), "token")),
-        COMMETHOD([], HRESULT, "remove_FrameNavigationCompleted", (["in"], EventRegistrationToken, "token")),
-        COMMETHOD([], HRESULT, "add_ScriptDialogOpening", (["in"], ctypes.c_void_p, "eventHandler"), (["out"], POINTER(EventRegistrationToken), "token")),
-        COMMETHOD([], HRESULT, "remove_ScriptDialogOpening", (["in"], EventRegistrationToken, "token")),
-        COMMETHOD([], HRESULT, "add_PermissionRequested", (["in"], ctypes.c_void_p, "eventHandler"), (["out"], POINTER(EventRegistrationToken), "token")),
-        COMMETHOD([], HRESULT, "remove_PermissionRequested", (["in"], EventRegistrationToken, "token")),
-        COMMETHOD([], HRESULT, "add_ProcessFailed", (["in"], ctypes.c_void_p, "eventHandler"), (["out"], POINTER(EventRegistrationToken), "token")),
-        COMMETHOD([], HRESULT, "remove_ProcessFailed", (["in"], EventRegistrationToken, "token")),
-        COMMETHOD([], HRESULT, "AddScriptToExecuteOnDocumentCreated", (["in"], ctypes.c_wchar_p, "javaScript"), (["in"], ctypes.c_void_p, "handler")),
-        COMMETHOD([], HRESULT, "RemoveScriptToExecuteOnDocumentCreated", (["in"], ctypes.c_wchar_p, "id")),
-        COMMETHOD([], HRESULT, "ExecuteScript", (["in"], ctypes.c_wchar_p, "javaScript"), (["in"], ctypes.c_void_p, "handler")),
-        COMMETHOD([], HRESULT, "CapturePreview", (["in"], ctypes.c_int, "imageFormat"), (["in"], ctypes.c_void_p, "imageStream"), (["in"], ctypes.c_void_p, "handler")),
-        COMMETHOD([], HRESULT, "Reload"),
-        COMMETHOD([], HRESULT, "PostWebMessageAsJson", (["in"], ctypes.c_wchar_p, "webMessageAsJson")),
-        COMMETHOD([], HRESULT, "PostWebMessageAsString", (["in"], ctypes.c_wchar_p, "webMessageAsString")),
-        COMMETHOD([], HRESULT, "add_WebMessageReceived", (["in"], ctypes.c_void_p, "handler"), (["out"], POINTER(EventRegistrationToken), "token")),
-        COMMETHOD([], HRESULT, "remove_WebMessageReceived", (["in"], EventRegistrationToken, "token")),
-        COMMETHOD([], HRESULT, "CallDevToolsProtocolMethod", (["in"], ctypes.c_wchar_p, "methodName"), (["in"], ctypes.c_wchar_p, "parametersAsJson"), (["in"], ctypes.c_void_p, "handler")),
-        COMMETHOD([], HRESULT, "get_BrowserProcessId", (["out"], POINTER(ctypes.c_uint), "value")),
-        COMMETHOD([], HRESULT, "get_CanGoBack", (["out"], POINTER(ctypes.c_int), "value")),
-        COMMETHOD([], HRESULT, "get_CanGoForward", (["out"], POINTER(ctypes.c_int), "value")),
-        COMMETHOD([], HRESULT, "GoBack"),
-        COMMETHOD([], HRESULT, "GoForward"),
+        COMMETHOD([], HRESULT, "get_Settings", (["out"], POINTER(ctypes.c_void_p), "settings")),
+        COMMETHOD([], HRESULT, "get_Source", (["out"], POINTER(ctypes.c_wchar_p), "uri")),
         COMMETHOD([], HRESULT, "Navigate", (["in"], ctypes.c_wchar_p, "uri")),
+        COMMETHOD([], HRESULT, "NavigateToString", (["in"], ctypes.c_wchar_p, "htmlContent")),
     ]
 
 
