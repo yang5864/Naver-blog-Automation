@@ -294,6 +294,8 @@ class App(ctk.CTk):
         )
         self.browser_native_host.place(x=0, y=0, relwidth=1, relheight=1)
         self.browser_native_host.lower()
+        self.browser_placeholder.bind("<Configure>", self._on_browser_host_configure, add="+")
+        self.browser_native_host.bind("<Configure>", self._on_browser_host_configure, add="+")
 
         self.browser_center_container = ctk.CTkFrame(self.browser_placeholder, fg_color="transparent", corner_radius=0)
         self.browser_center_container.grid(row=0, column=0, sticky="")
@@ -330,6 +332,7 @@ class App(ctk.CTk):
 
         # 마우스 휠: bind_all 대신 왼쪽 패널 위젯에만 직접 바인딩 (클릭 간섭 없음)
         self.after(100, lambda: self._bind_scroll_recursive(self.left_panel))
+        self.after(140, lambda: self._bind_focus_recursive(self.left_panel))
 
         self.after(300, self._auto_open_login_page)
 
@@ -516,8 +519,15 @@ class App(ctk.CTk):
     def _resize_webview2_panel(self):
         if not self.webview2_host:
             return
+        self._cache_browser_embed_metrics()
         x, y, w, h = self.get_browser_embed_client_rect()
-        self.webview2_host.resize(x, y, w, h)
+        self.webview2_host.resize(
+            x,
+            y,
+            w,
+            h,
+            parent_hwnd=self.get_browser_embed_hwnd(),
+        )
 
     def _settle_webview2_bounds(self):
         if not (self.use_webview2_panel and self.webview2_host and self.webview2_host.is_ready):
@@ -548,6 +558,10 @@ class App(ctk.CTk):
     def _on_window_move(self, event):
         if event.widget != self:
             return
+        if self.use_webview2_panel and self.webview2_host:
+            self._cache_browser_embed_metrics()
+            self._resize_webview2_panel()
+            return
         current_time = time.time()
         if current_time - self._last_update_time < self._update_throttle:
             return
@@ -564,9 +578,6 @@ class App(ctk.CTk):
             return
         self._last_geometry = current_geometry
         self._last_update_time = current_time
-        if self.use_webview2_panel and self.webview2_host:
-            self._resize_webview2_panel()
-            return
         if self.logic and self.logic.driver and not self._position_update_scheduled:
             self._position_update_scheduled = True
             self.after(80, self._update_chrome_position)
@@ -585,11 +596,41 @@ class App(ctk.CTk):
         except Exception:
             pass
 
+    def _on_browser_host_configure(self, _event=None):
+        if not (self.use_webview2_panel and self.webview2_host):
+            return
+        self.after_idle(self._resize_webview2_panel)
+
     def _bind_scroll_recursive(self, widget):
         """위젯과 모든 자식에게 마우스 휠 바인딩 (bind_all 없이)."""
         widget.bind("<MouseWheel>", self._on_mousewheel, add="+")
         for child in widget.winfo_children():
             self._bind_scroll_recursive(child)
+
+    def _bind_focus_recursive(self, widget):
+        """입력 위젯 클릭 시 포커스를 실제 입력 컨트롤로 보정."""
+        if isinstance(widget, (ctk.CTkEntry, ctk.CTkTextbox, tk.Entry, tk.Text)):
+            widget.bind("<Button-1>", self._focus_left_widget, add="+")
+        for child in widget.winfo_children():
+            self._bind_focus_recursive(child)
+
+    def _resolve_focus_target(self, widget):
+        if isinstance(widget, ctk.CTkEntry):
+            return getattr(widget, "_entry", widget)
+        if isinstance(widget, ctk.CTkTextbox):
+            return getattr(widget, "_textbox", widget)
+        if isinstance(widget, (tk.Entry, tk.Text)):
+            return widget
+        return None
+
+    def _focus_left_widget(self, event):
+        try:
+            target = self._resolve_focus_target(event.widget)
+            if target is None:
+                return
+            self.after_idle(target.focus_set)
+        except Exception:
+            pass
 
     def _on_mousewheel(self, event):
         # 독립 스크롤 텍스트박스 위인지 확인

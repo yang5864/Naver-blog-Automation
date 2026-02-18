@@ -199,11 +199,17 @@ class WebView2PanelHost:
         self._log_info("환경 생성 요청 완료")
         return True
 
-    def resize(self, x, y, width, height):
+    def resize(self, x, y, width, height, parent_hwnd=None):
         self._bounds = (int(x), int(y), max(1, int(width)), max(1, int(height)))
+        if parent_hwnd is not None:
+            next_parent = int(parent_hwnd or 0)
+            if next_parent > 0:
+                self._parent_hwnd = next_parent
         if not self._controller:
             return
         try:
+            if self._parent_hwnd > 0:
+                self._controller.put_ParentWindow(wintypes.HWND(self._parent_hwnd))
             bx, by, bw, bh = self._bounds
             rect = self._get_parent_client_rect()
             if rect is None:
@@ -211,11 +217,9 @@ class WebView2PanelHost:
             else:
                 client_w = max(1, int(rect.right - rect.left))
                 client_h = max(1, int(rect.bottom - rect.top))
-                # DPI 가상화로 client rect가 작게 들어오는 환경을 보정
-                final_w = max(client_w, int(bw))
-                final_h = max(client_h, int(bh))
-                rect = RECT(0, 0, final_w, final_h)
+                rect = RECT(0, 0, client_w, client_h)
             self._controller.put_Bounds(rect)
+            self._controller.NotifyParentWindowPositionChanged()
         except Exception as exc:
             self._set_error(f"리사이즈 실패: {exc}")
 
@@ -289,8 +293,13 @@ class WebView2PanelHost:
 
         try:
             self._controller.put_IsVisible(1)
+            self._controller.put_ParentWindow(wintypes.HWND(self._parent_hwnd))
             self.resize(*self._bounds)
             self._webview = self._controller.get_CoreWebView2()
+            try:
+                self._controller.put_ZoomFactor(1.0)
+            except Exception:
+                pass
             if self._initial_url:
                 self._log_info(f"Navigate 요청: {self._initial_url}")
                 self._webview.Navigate(self._initial_url)
