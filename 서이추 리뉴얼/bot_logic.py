@@ -292,6 +292,7 @@ class NaverBotLogic:
         WS_SYSMENU = 0x00080000
         SWP_NOZORDER = 0x0004
         SWP_NOACTIVATE = 0x0010
+        SWP_FRAMECHANGED = 0x0020
         SW_HIDE = 0
         SW_SHOW = 5
 
@@ -312,6 +313,8 @@ class NaverBotLogic:
             user32.SetParent(hwnd, target_hwnd)
             if user32.GetParent(hwnd) != target_hwnd:
                 self.log("⚠️ 임베드 실패: SetParent 호출 실패")
+                self._embedded_chrome_hwnd = None
+                self._embed_parent_hwnd = None
                 self._recover_chrome_window_position(chrome_x, chrome_y, chrome_width, chrome_height)
                 return False
             self._embedded_chrome_hwnd = hwnd
@@ -322,6 +325,8 @@ class NaverBotLogic:
         if self._embed_parent_hwnd != target_hwnd:
             user32.SetParent(self._embedded_chrome_hwnd, target_hwnd)
             if user32.GetParent(self._embedded_chrome_hwnd) != target_hwnd:
+                self._embedded_chrome_hwnd = None
+                self._embed_parent_hwnd = None
                 return False
             self._embed_parent_hwnd = target_hwnd
 
@@ -347,7 +352,7 @@ class NaverBotLogic:
             pos_y,
             width,
             height,
-            SWP_NOZORDER | SWP_NOACTIVATE,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
         )
         return True
 

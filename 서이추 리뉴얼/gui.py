@@ -24,7 +24,7 @@ class App(ctk.CTk):
         self.embed_browser_windows = bool(self.config.get("embed_browser_windows")) and platform.system() == "Windows"
         self._browser_embed_rect = (0, 0, 100, 100)
         self._browser_embed_hwnd = 0
-        self._browser_embed_client_rect = (30, 30, 100, 100)
+        self._browser_embed_client_rect = (0, 0, 100, 100)
 
         # 부드러운 스크롤 상태
         self._scroll_velocity = 0.0
@@ -396,8 +396,6 @@ class App(ctk.CTk):
     def _cache_browser_embed_metrics(self, force_update=False):
         if force_update:
             self.update_idletasks()
-        panel_root_x = int(self.right_panel.winfo_rootx())
-        panel_root_y = int(self.right_panel.winfo_rooty())
         placeholder_root_x = int(self.browser_placeholder.winfo_rootx())
         placeholder_root_y = int(self.browser_placeholder.winfo_rooty())
         placeholder_w = int(self.browser_placeholder.winfo_width())
@@ -409,10 +407,11 @@ class App(ctk.CTk):
             placeholder_w,
             placeholder_h,
         )
-        self._browser_embed_hwnd = int(self.right_panel.winfo_id())
+        # 임베드 부모를 placeholder로 고정해 브라우저가 좌측 UI를 침범하지 않게 함
+        self._browser_embed_hwnd = int(self.browser_placeholder.winfo_id())
         self._browser_embed_client_rect = (
-            max(0, placeholder_root_x - panel_root_x),
-            max(0, placeholder_root_y - panel_root_y),
+            0,
+            0,
             max(100, placeholder_w),
             max(100, placeholder_h),
         )
