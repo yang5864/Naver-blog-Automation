@@ -5,6 +5,9 @@ import os
 import subprocess
 import platform
 import socket
+import sys
+import json
+import urllib.request
 
 
 from selenium import webdriver
@@ -45,6 +48,7 @@ class NaverBotLogic:
         self._embed_attempt_count = 0
         self.webview2_host = None
         self.webview2_mode = False
+        self._last_attach_errors = []
 
         # 성능 설정
         self.page_load_timeout = config.get("page_load_timeout")
@@ -161,29 +165,133 @@ class NaverBotLogic:
     def _get_debug_port(self):
         return int(self.config.get("chrome_debug_port") or 9222)
 
-    def _attach_debugger_driver(self, debug_port):
-        debugger_address = f"127.0.0.1:{int(debug_port)}"
-
+    def _fetch_devtools_version(self, debug_port):
         try:
-            from selenium.webdriver.edge.options import Options as EdgeOptions
-
-            edge_options = EdgeOptions()
-            edge_options.use_chromium = True
-            edge_options.add_experimental_option("debuggerAddress", debugger_address)
-            driver = webdriver.Edge(options=edge_options)
-            self.log("   ↪ msedgedriver attach 성공")
-            return driver
-        except Exception:
-            pass
-
-        try:
-            chrome_options = Options()
-            chrome_options.add_experimental_option("debuggerAddress", debugger_address)
-            driver = webdriver.Chrome(options=chrome_options)
-            self.log("   ↪ chromedriver attach 성공")
-            return driver
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{int(debug_port)}/json/version",
+                timeout=1.0,
+            ) as resp:
+                raw = resp.read().decode("utf-8", errors="ignore")
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return data
+            return None
         except Exception:
             return None
+
+    def _wait_devtools_ready(self, debug_port, timeout_sec=12.0):
+        deadline = time.time() + float(timeout_sec)
+        info = None
+        while time.time() < deadline:
+            if not self._is_debug_port_open(debug_port):
+                time.sleep(0.1)
+                continue
+            info = self._fetch_devtools_version(debug_port)
+            if info and info.get("webSocketDebuggerUrl"):
+                return info
+            time.sleep(0.15)
+        return info
+
+    def _candidate_driver_paths(self, filename):
+        roots = []
+        if hasattr(sys, "_MEIPASS"):
+            roots.append(getattr(sys, "_MEIPASS"))
+        if getattr(sys, "frozen", False):
+            try:
+                roots.append(os.path.dirname(sys.executable))
+            except Exception:
+                pass
+        roots.append(os.path.dirname(os.path.abspath(__file__)))
+        roots.append(os.getcwd())
+        for root in roots:
+            try:
+                path = os.path.join(root, filename)
+                if os.path.isfile(path):
+                    yield path
+            except Exception:
+                continue
+
+    def _attach_debugger_driver(self, debug_port):
+        debugger_address = f"127.0.0.1:{int(debug_port)}"
+        errors = []
+
+        def _edge_options():
+            from selenium.webdriver.edge.options import Options as EdgeOptions
+
+            opts = EdgeOptions()
+            opts.use_chromium = True
+            opts.add_experimental_option("debuggerAddress", debugger_address)
+            return opts
+
+        def _chrome_options():
+            opts = Options()
+            opts.add_experimental_option("debuggerAddress", debugger_address)
+            return opts
+
+        try:
+            driver = webdriver.Edge(options=_edge_options())
+            self.log("   ↪ msedgedriver attach 성공")
+            return driver
+        except Exception as exc:
+            errors.append(f"Edge(default): {str(exc)[:140]}")
+
+        try:
+            from selenium.webdriver.edge.service import Service as EdgeService
+
+            for path in self._candidate_driver_paths("msedgedriver.exe"):
+                try:
+                    driver = webdriver.Edge(service=EdgeService(executable_path=path), options=_edge_options())
+                    self.log(f"   ↪ msedgedriver(local) attach 성공: {path}")
+                    return driver
+                except Exception as exc:
+                    errors.append(f"Edge(local:{os.path.basename(path)}): {str(exc)[:140]}")
+        except Exception as exc:
+            errors.append(f"Edge(service-import): {str(exc)[:140]}")
+
+        try:
+            driver = webdriver.Chrome(options=_chrome_options())
+            self.log("   ↪ chromedriver attach 성공")
+            return driver
+        except Exception as exc:
+            errors.append(f"Chrome(default): {str(exc)[:140]}")
+
+        try:
+            from selenium.webdriver.chrome.service import Service as ChromeService
+
+            for path in self._candidate_driver_paths("chromedriver.exe"):
+                try:
+                    driver = webdriver.Chrome(service=ChromeService(executable_path=path), options=_chrome_options())
+                    self.log(f"   ↪ chromedriver(local) attach 성공: {path}")
+                    return driver
+                except Exception as exc:
+                    errors.append(f"Chrome(local:{os.path.basename(path)}): {str(exc)[:140]}")
+        except Exception as exc:
+            errors.append(f"Chrome(service-import): {str(exc)[:140]}")
+
+        try:
+            from selenium.webdriver.edge.service import Service as EdgeService
+            from webdriver_manager.microsoft import EdgeChromiumDriverManager
+
+            driver_path = EdgeChromiumDriverManager().install()
+            driver = webdriver.Edge(service=EdgeService(executable_path=driver_path), options=_edge_options())
+            self.log("   ↪ msedgedriver(manager) attach 성공")
+            return driver
+        except Exception as exc:
+            errors.append(f"Edge(manager): {str(exc)[:140]}")
+
+        try:
+            from selenium.webdriver.chrome.service import Service as ChromeService
+            from webdriver_manager.chrome import ChromeDriverManager
+
+            driver_path = ChromeDriverManager().install()
+            driver = webdriver.Chrome(service=ChromeService(executable_path=driver_path), options=_chrome_options())
+            self.log("   ↪ chromedriver(manager) attach 성공")
+            return driver
+        except Exception as exc:
+            errors.append(f"Chrome(manager): {str(exc)[:140]}")
+
+        self._last_attach_errors = errors
+        return None
 
     def _connect_driver_webview2(self, force_restart=False):
         if self.driver and not force_restart:
@@ -205,18 +313,20 @@ class NaverBotLogic:
             self.log("❌ WebView2 DevTools 포트를 찾을 수 없습니다.")
             return False
 
-        for _ in range(40):
-            if self._is_debug_port_open(debug_port):
-                break
-            time.sleep(0.1)
-        if not self._is_debug_port_open(debug_port):
-            self.log(f"❌ WebView2 DevTools 포트 연결 실패: {debug_port}")
+        info = self._wait_devtools_ready(debug_port, timeout_sec=15.0)
+        if not info:
+            self.log(f"❌ WebView2 DevTools 준비 실패: {debug_port}")
             return False
+
+        browser_name = info.get("Browser", "unknown")
+        self.log(f"   ↪ DevTools browser: {browser_name}")
 
         self.log(f"🌐 WebView2 자동화 연결 시도: {debug_port}")
         self.driver = self._attach_debugger_driver(debug_port)
         if not self.driver:
             self.log("❌ WebView2 자동화 연결 실패 (드라이버 attach 실패)")
+            for err in self._last_attach_errors[:6]:
+                self.log(f"   ↪ {err}")
             return False
 
         try:

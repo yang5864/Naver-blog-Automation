@@ -20,6 +20,24 @@ if exist "WebView2Loader (1).dll" (
   copy /y "WebView2Loader (1).dll" "WebView2Loader.dll" >nul
 )
 
+if not exist "msedgedriver.exe" (
+  for /f "delims=" %%I in ('where msedgedriver 2^>nul') do (
+    echo [INFO] Found msedgedriver at %%I
+    copy /y "%%I" "msedgedriver.exe" >nul
+    goto :EDGE_DRIVER_DONE
+  )
+)
+:EDGE_DRIVER_DONE
+
+if not exist "chromedriver.exe" (
+  for /f "delims=" %%I in ('where chromedriver 2^>nul') do (
+    echo [INFO] Found chromedriver at %%I
+    copy /y "%%I" "chromedriver.exe" >nul
+    goto :CHROME_DRIVER_DONE
+  )
+)
+:CHROME_DRIVER_DONE
+
 echo [INFO] Closing running SeoiChuPro if exists...
 taskkill /F /IM SeoiChuPro.exe >nul 2>nul
 timeout /t 1 /nobreak >nul
@@ -52,6 +70,10 @@ endlocal
 exit /b 0
 
 :RUN_BUILD
+set "DRIVER_BIN_ARGS="
+if exist "msedgedriver.exe" set "DRIVER_BIN_ARGS=%DRIVER_BIN_ARGS% --add-binary msedgedriver.exe;."
+if exist "chromedriver.exe" set "DRIVER_BIN_ARGS=%DRIVER_BIN_ARGS% --add-binary chromedriver.exe;."
+
 if exist fonts (
   if exist "WebView2Loader.dll" (
     pyinstaller ^
@@ -64,7 +86,7 @@ if exist fonts (
       --add-data "config.json;." ^
       --add-data "fonts;fonts" ^
       --add-data "WebView2Loader.dll;." ^
-      main.py
+      %DRIVER_BIN_ARGS% main.py
   ) else (
     pyinstaller ^
       --noconfirm ^
@@ -75,7 +97,7 @@ if exist fonts (
       --name "SeoiChuPro" ^
       --add-data "config.json;." ^
       --add-data "fonts;fonts" ^
-      main.py
+      %DRIVER_BIN_ARGS% main.py
   )
 ) else (
   if exist "WebView2Loader.dll" (
@@ -88,7 +110,7 @@ if exist fonts (
       --name "SeoiChuPro" ^
       --add-data "config.json;." ^
       --add-data "WebView2Loader.dll;." ^
-      main.py
+      %DRIVER_BIN_ARGS% main.py
   ) else (
     pyinstaller ^
       --noconfirm ^
@@ -98,7 +120,7 @@ if exist fonts (
       --workpath "%WORK_OUT%" ^
       --name "SeoiChuPro" ^
       --add-data "config.json;." ^
-      main.py
+      %DRIVER_BIN_ARGS% main.py
   )
 )
 exit /b %errorlevel%
