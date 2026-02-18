@@ -156,12 +156,6 @@ class NaverBotLogic:
             chrome_x, chrome_y = 800, 0
             chrome_width, chrome_height = 1000, 900
 
-        # Windows 임베드 모드: 화면 밖에서 시작하여 깜빡임 방지
-        if self._is_windows and self.embed_browser_windows:
-            pos_x, pos_y = -32000, -32000
-        else:
-            pos_x, pos_y = chrome_x, chrome_y
-
         cmd = [
             chrome_path,
             f"--remote-debugging-port={debug_port}",
@@ -169,7 +163,7 @@ class NaverBotLogic:
             "--no-first-run",
             "--no-default-browser-check",
             f"--window-size={chrome_width},{chrome_height}",
-            f"--window-position={pos_x},{pos_y}",
+            f"--window-position={chrome_x},{chrome_y}",
         ]
         if initial_url:
             cmd.append(initial_url)
@@ -298,6 +292,7 @@ class NaverBotLogic:
         WS_SYSMENU = 0x00080000
         SWP_NOZORDER = 0x0004
         SWP_NOACTIVATE = 0x0010
+        SW_HIDE = 0
         SW_SHOW = 5
 
         if not self._embedded_chrome_hwnd:
@@ -306,6 +301,9 @@ class NaverBotLogic:
                 self.log("⚠️ 임베드 실패: Chrome 윈도우를 찾을 수 없음")
                 self._recover_chrome_window_position(chrome_x, chrome_y, chrome_width, chrome_height)
                 return False
+
+            # 임베드 전 즉시 숨겨서 별도 창이 보이는 현상 방지
+            user32.ShowWindow(hwnd, SW_HIDE)
 
             style = user32.GetWindowLongW(hwnd, GWL_STYLE)
             style = (style | WS_CHILD) & ~WS_POPUP
@@ -398,7 +396,24 @@ class NaverBotLogic:
         return None
 
     def _recover_chrome_window_position(self, chrome_x, chrome_y, chrome_width, chrome_height):
-        """임베드 실패 시 화면 밖에 숨겨진 Chrome 창을 원래 위치로 복구."""
+        """임베드 실패 시 숨겨진 Chrome 창을 원래 위치로 복구."""
+        # ShowWindow로 숨긴 창 복구
+        try:
+            import ctypes
+            from ctypes import wintypes
+            user32 = ctypes.windll.user32
+
+            EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+            def _show_callback(hwnd, _lparam):
+                class_name = ctypes.create_unicode_buffer(256)
+                user32.GetClassNameW(hwnd, class_name, 256)
+                if class_name.value == "Chrome_WidgetWin_1" and user32.GetParent(hwnd) == 0:
+                    user32.ShowWindow(hwnd, 5)  # SW_SHOW
+                return True
+            user32.EnumWindows(EnumWindowsProc(_show_callback), 0)
+        except Exception:
+            pass
+        # Selenium으로도 위치 복구
         if not self.driver:
             return
         try:
