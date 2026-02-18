@@ -5,6 +5,7 @@ import os
 import subprocess
 import platform
 import socket
+import tempfile
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -40,6 +41,8 @@ class NaverBotLogic:
         self._embedded_chrome_hwnd = None
         self._embed_parent_hwnd = None
         self._chrome_process_id = None
+        self._runtime_debug_port = None
+        self._chrome_user_data_dir = None
 
         # 성능 설정
         self.page_load_timeout = config.get("page_load_timeout")
@@ -146,8 +149,39 @@ class NaverBotLogic:
         except OSError:
             return False
 
+    def _find_free_local_port(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            return int(s.getsockname()[1])
+
+    def _get_debug_port(self):
+        if self._runtime_debug_port:
+            return int(self._runtime_debug_port)
+
+        preferred = int(self.config.get("chrome_debug_port") or 9222)
+        if self._is_windows and self.embed_browser_windows:
+            if self._is_debug_port_open(preferred):
+                self._runtime_debug_port = self._find_free_local_port()
+            else:
+                self._runtime_debug_port = preferred
+            return int(self._runtime_debug_port)
+
+        return preferred
+
+    def _get_chrome_user_data_dir(self):
+        if self._chrome_user_data_dir:
+            return self._chrome_user_data_dir
+
+        if self._is_windows and self.embed_browser_windows:
+            # 기존 Chrome 인스턴스와 충돌하지 않게 세션별 프로필 사용
+            self._chrome_user_data_dir = tempfile.mkdtemp(prefix="SeoiChuChrome_")
+        else:
+            self._chrome_user_data_dir = os.path.expanduser("~/ChromeBotData")
+            os.makedirs(self._chrome_user_data_dir, exist_ok=True)
+        return self._chrome_user_data_dir
+
     def _launch_chrome_process(self, debug_port, initial_url=None):
-        user_data_dir = os.path.expanduser("~/ChromeBotData")
+        user_data_dir = self._get_chrome_user_data_dir()
         chrome_path = AppConfig.get_chrome_path()
 
         self._embedded_chrome_hwnd = None
@@ -177,7 +211,7 @@ class NaverBotLogic:
 
     def connect_driver(self, force_restart=False, initial_url=None):
         """크롬 연결 (GUI 오른쪽 패널 위치에 배치)"""
-        debug_port = self.config.get("chrome_debug_port")
+        debug_port = self._get_debug_port()
 
         if self.driver and not force_restart:
             try:
@@ -191,7 +225,9 @@ class NaverBotLogic:
 
         self.log("🖥️ 크롬 브라우저 실행 중...")
         try:
-            # 포트가 닫혀있으면 먼저 크롬부터 즉시 띄워 체감 속도를 높임
+            if self._is_windows and self.embed_browser_windows:
+                self.log(f"   ↪ 임베드 세션 포트: {debug_port}")
+            # 세션 전용 포트가 닫혀있으면 우리가 관리하는 Chrome 프로세스를 실행
             if not self._is_debug_port_open(debug_port):
                 self._launch_chrome_process(debug_port, initial_url=initial_url)
 
@@ -310,12 +346,17 @@ class NaverBotLogic:
         SW_SHOW = 5
         SW_RESTORE = 9
 
+        if self._embedded_chrome_hwnd and not user32.IsWindow(self._embedded_chrome_hwnd):
+            self._embedded_chrome_hwnd = None
+            self._embed_parent_hwnd = None
+
         if not self._embedded_chrome_hwnd:
             hwnd = self._find_chrome_hwnd(user32, chrome_x, chrome_y, chrome_width, chrome_height)
             if not hwnd:
                 self.log("⚠️ 임베드 실패: Chrome 윈도우를 찾을 수 없음")
                 self._recover_chrome_window_position(chrome_x, chrome_y, chrome_width, chrome_height)
                 return False
+            self.log(f"   ↪ HWND 연결: chrome={int(hwnd)} -> target={int(target_hwnd)}")
 
             # 임베드 전 즉시 숨겨서 별도 창이 보이는 현상 방지
             user32.ShowWindow(hwnd, SW_HIDE)
@@ -488,7 +529,7 @@ class NaverBotLogic:
 
     def open_login_page(self):
         login_url = "https://nid.naver.com/nidlogin.login"
-        debug_port = self.config.get("chrome_debug_port")
+        debug_port = self._get_debug_port()
 
         # 먼저 로그인 URL로 크롬 프로세스를 띄워 UI 노출 속도를 우선 확보
         if not self.driver and not self._is_debug_port_open(debug_port):
