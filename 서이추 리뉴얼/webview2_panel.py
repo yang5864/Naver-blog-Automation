@@ -217,7 +217,11 @@ class WebView2PanelHost:
             else:
                 client_w = max(1, int(rect.right - rect.left))
                 client_h = max(1, int(rect.bottom - rect.top))
-                rect = RECT(0, 0, client_w, client_h)
+                left = max(0, min(int(bx), client_w - 1))
+                top = max(0, min(int(by), client_h - 1))
+                width = max(1, min(int(bw), client_w - left))
+                height = max(1, min(int(bh), client_h - top))
+                rect = RECT(left, top, left + width, top + height)
             self._controller.put_Bounds(rect)
             self._controller.NotifyParentWindowPositionChanged()
         except Exception as exc:

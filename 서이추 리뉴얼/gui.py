@@ -32,10 +32,13 @@ class App(ctk.CTk):
         self._browser_embed_rect = (0, 0, 100, 100)
         self._browser_embed_hwnd = 0
         self._browser_embed_client_rect = (0, 0, 100, 100)
+        self._webview_parent_hwnd = 0
+        self._webview_bounds = (0, 0, 100, 100)
         self.webview2_host = None
         self._webview2_ready = False
         self._webview2_poll_count = 0
         self._webview2_settle_remaining = 0
+        self._webview2_resize_job = None
 
         # 부드러운 스크롤 상태
         self._scroll_velocity = 0.0
@@ -435,6 +438,38 @@ class App(ctk.CTk):
         """임베드 부모(hwnd) 기준 브라우저 영역 상대 좌표."""
         return self._browser_embed_client_rect
 
+    def get_webview_parent_hwnd(self):
+        """WebView2 parent HWND (메인 창)."""
+        if self._webview_parent_hwnd:
+            return int(self._webview_parent_hwnd)
+        try:
+            return int(self.winfo_id())
+        except Exception:
+            return 0
+
+    def get_webview_bounds(self):
+        """WebView2가 메인 창 client 영역에서 차지할 상대 좌표."""
+        return self._webview_bounds
+
+    def _get_window_client_origin(self):
+        """메인 창 client 영역의 screen 좌표 원점 반환."""
+        fallback = (int(self.winfo_rootx()), int(self.winfo_rooty()))
+        if platform.system() != "Windows":
+            return fallback
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            hwnd = wintypes.HWND(int(self.winfo_id()))
+            user32 = ctypes.windll.user32
+            pt = wintypes.POINT(0, 0)
+            ok = user32.ClientToScreen(hwnd, ctypes.byref(pt))
+            if not ok:
+                return fallback
+            return int(pt.x), int(pt.y)
+        except Exception:
+            return fallback
+
     def _cache_browser_embed_metrics(self, force_update=False):
         if force_update:
             self.update_idletasks()
@@ -455,6 +490,14 @@ class App(ctk.CTk):
         self._browser_embed_client_rect = (
             0,
             0,
+            max(1, host_w),
+            max(1, host_h),
+        )
+        top_client_x, top_client_y = self._get_window_client_origin()
+        self._webview_parent_hwnd = int(self.winfo_id())
+        self._webview_bounds = (
+            max(0, host_root_x - int(top_client_x)),
+            max(0, host_root_y - int(top_client_y)),
             max(1, host_w),
             max(1, host_h),
         )
@@ -480,10 +523,10 @@ class App(ctk.CTk):
         if not self.use_webview2_panel or not self.webview2_host:
             return
         self._cache_browser_embed_metrics(force_update=True)
-        _, _, w, h = self.get_browser_embed_client_rect()
+        x, y, w, h = self.get_webview_bounds()
         started = self.webview2_host.start(
-            self.get_browser_embed_hwnd(),
-            (0, 0, w, h),
+            self.get_webview_parent_hwnd(),
+            (x, y, w, h),
             "https://nid.naver.com/nidlogin.login",
         )
         if not started:
@@ -505,9 +548,9 @@ class App(ctk.CTk):
                 self.browser_center_container.grid_remove()
                 self.update_browser_status("WebView2 연결됨", "green")
                 self.log_msg("🧩 WebView2 내장 브라우저 모드 활성화")
-                self._webview2_settle_remaining = 20
+                self._webview2_settle_remaining = 12
                 self.after(80, self._settle_webview2_bounds)
-            self._resize_webview2_panel()
+            self._schedule_webview2_resize()
             return
         if self._webview2_poll_count < 120:
             self.after(120, self._poll_webview2_ready)
@@ -520,13 +563,13 @@ class App(ctk.CTk):
         if not self.webview2_host:
             return
         self._cache_browser_embed_metrics()
-        x, y, w, h = self.get_browser_embed_client_rect()
+        x, y, w, h = self.get_webview_bounds()
         self.webview2_host.resize(
             x,
             y,
             w,
             h,
-            parent_hwnd=self.get_browser_embed_hwnd(),
+            parent_hwnd=self.get_webview_parent_hwnd(),
         )
 
     def _settle_webview2_bounds(self):
@@ -539,6 +582,12 @@ class App(ctk.CTk):
             self.after(120, self._settle_webview2_bounds)
 
     def _on_close(self):
+        try:
+            if self._webview2_resize_job is not None:
+                self.after_cancel(self._webview2_resize_job)
+                self._webview2_resize_job = None
+        except Exception:
+            pass
         try:
             if self.webview2_host:
                 self.webview2_host.close()
@@ -559,8 +608,7 @@ class App(ctk.CTk):
         if event.widget != self:
             return
         if self.use_webview2_panel and self.webview2_host:
-            self._cache_browser_embed_metrics()
-            self._resize_webview2_panel()
+            self._schedule_webview2_resize()
             return
         current_time = time.time()
         if current_time - self._last_update_time < self._update_throttle:
@@ -599,7 +647,21 @@ class App(ctk.CTk):
     def _on_browser_host_configure(self, _event=None):
         if not (self.use_webview2_panel and self.webview2_host):
             return
-        self.after_idle(self._resize_webview2_panel)
+        self._schedule_webview2_resize()
+
+    def _schedule_webview2_resize(self):
+        if not (self.use_webview2_panel and self.webview2_host):
+            return
+        if self._webview2_resize_job is not None:
+            return
+
+        def _run():
+            self._webview2_resize_job = None
+            if not (self.use_webview2_panel and self.webview2_host):
+                return
+            self._resize_webview2_panel()
+
+        self._webview2_resize_job = self.after_idle(_run)
 
     def _bind_scroll_recursive(self, widget):
         """위젯과 모든 자식에게 마우스 휠 바인딩 (bind_all 없이)."""
