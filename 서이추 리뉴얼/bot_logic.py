@@ -156,6 +156,12 @@ class NaverBotLogic:
             chrome_x, chrome_y = 800, 0
             chrome_width, chrome_height = 1000, 900
 
+        # Windows 임베드 모드: 화면 밖에서 시작하여 깜빡임 방지
+        if self._is_windows and self.embed_browser_windows:
+            pos_x, pos_y = -32000, -32000
+        else:
+            pos_x, pos_y = chrome_x, chrome_y
+
         cmd = [
             chrome_path,
             f"--remote-debugging-port={debug_port}",
@@ -163,7 +169,7 @@ class NaverBotLogic:
             "--no-first-run",
             "--no-default-browser-check",
             f"--window-size={chrome_width},{chrome_height}",
-            f"--window-position={chrome_x},{chrome_y}",
+            f"--window-position={pos_x},{pos_y}",
         ]
         if initial_url:
             cmd.append(initial_url)
@@ -297,6 +303,8 @@ class NaverBotLogic:
         if not self._embedded_chrome_hwnd:
             hwnd = self._find_chrome_hwnd(user32, chrome_x, chrome_y, chrome_width, chrome_height)
             if not hwnd:
+                self.log("⚠️ 임베드 실패: Chrome 윈도우를 찾을 수 없음")
+                self._recover_chrome_window_position(chrome_x, chrome_y, chrome_width, chrome_height)
                 return False
 
             style = user32.GetWindowLongW(hwnd, GWL_STYLE)
@@ -305,6 +313,8 @@ class NaverBotLogic:
             user32.SetWindowLongW(hwnd, GWL_STYLE, style)
             user32.SetParent(hwnd, target_hwnd)
             if user32.GetParent(hwnd) != target_hwnd:
+                self.log("⚠️ 임베드 실패: SetParent 호출 실패")
+                self._recover_chrome_window_position(chrome_x, chrome_y, chrome_width, chrome_height)
                 return False
             self._embedded_chrome_hwnd = hwnd
             self._embed_parent_hwnd = target_hwnd
@@ -364,11 +374,9 @@ class NaverBotLogic:
             if class_name.value != "Chrome_WidgetWin_1":
                 return True
 
-            if self._chrome_process_id:
-                pid = wintypes.DWORD()
-                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                if pid.value != self._chrome_process_id:
-                    return True
+            # 이미 다른 창에 임베드된 Chrome 창은 제외
+            if user32.GetParent(hwnd) != 0:
+                return True
 
             rc = wintypes.RECT()
             if not user32.GetWindowRect(hwnd, ctypes.byref(rc)):
@@ -382,12 +390,22 @@ class NaverBotLogic:
             return True
 
         # 연결 직후 창 생성/전환 지연을 고려한 재시도
-        for _ in range(10):
+        for _ in range(15):
             user32.EnumWindows(EnumWindowsProc(_callback), 0)
             if found["hwnd"]:
                 return found["hwnd"]
-            time.sleep(0.2)
+            time.sleep(0.3)
         return None
+
+    def _recover_chrome_window_position(self, chrome_x, chrome_y, chrome_width, chrome_height):
+        """임베드 실패 시 화면 밖에 숨겨진 Chrome 창을 원래 위치로 복구."""
+        if not self.driver:
+            return
+        try:
+            self.driver.set_window_position(chrome_x, chrome_y)
+            self.driver.set_window_size(chrome_width, chrome_height)
+        except WebDriverException:
+            pass
 
     # ------------------------------------------------------------------
     # 로그인 / 검색
