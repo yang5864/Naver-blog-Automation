@@ -8,6 +8,11 @@ from config import AppConfig
 from constants import IOS_COLORS, IOS_FONT_LARGE, IOS_FONT_MEDIUM, IOS_FONT_REGULAR, IOS_FONT_SMALL, IOS_FONT_MONO
 from bot_logic import NaverBotLogic
 
+try:
+    from webview2_panel import WebView2PanelHost
+except Exception:
+    WebView2PanelHost = None
+
 
 class App(ctk.CTk):
     def __init__(self, config: AppConfig):
@@ -22,9 +27,13 @@ class App(ctk.CTk):
 
         self.logic = NaverBotLogic(config, self.log_msg, self.update_prog, self.update_browser_status, gui_window=self)
         self.embed_browser_windows = bool(self.config.get("embed_browser_windows")) and platform.system() == "Windows"
+        self.use_webview2_panel = bool(self.config.get("use_webview2_panel")) and platform.system() == "Windows"
         self._browser_embed_rect = (0, 0, 100, 100)
         self._browser_embed_hwnd = 0
         self._browser_embed_client_rect = (0, 0, 100, 100)
+        self.webview2_host = None
+        self._webview2_ready = False
+        self._webview2_poll_count = 0
 
         # 부드러운 스크롤 상태
         self._scroll_velocity = 0.0
@@ -212,6 +221,9 @@ class App(ctk.CTk):
             corner_radius=12, height=54, font=("SF Pro Text", 17, "bold"),
         )
         self.btn_stop.pack(fill="x", padx=20, pady=(0, 20))
+        self.btn_stop.configure(state="disabled")
+        if self.use_webview2_panel:
+            self.btn_start.configure(text="작업 시작 (준비중)")
 
         # ---- 진행률 카드 ----
         progress_frame = ctk.CTkFrame(
@@ -281,8 +293,9 @@ class App(ctk.CTk):
         )
         self.lbl_browser_placeholder.pack(pady=(0, 14))
 
+        placeholder_desc = "WebView2 브라우저가 이 영역에\n내장되어 실행됩니다" if self.use_webview2_panel else "크롬 창이 이 영역에\n자동으로 배치됩니다"
         ctk.CTkLabel(
-            self.browser_center_container, text="크롬 창이 이 영역에\n자동으로 배치됩니다",
+            self.browser_center_container, text=placeholder_desc,
             font=IOS_FONT_REGULAR, text_color=IOS_COLORS["text_secondary"], justify="center",
         ).pack(pady=(0, 50))
 
@@ -297,6 +310,10 @@ class App(ctk.CTk):
         self._load_from_config()
         self._cache_browser_embed_metrics(force_update=True)
         self.log_msg("프로그램 준비 완료.")
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        if self.use_webview2_panel:
+            self._init_webview2_panel()
 
         # 마우스 휠: bind_all 대신 왼쪽 패널 위젯에만 직접 바인딩 (클릭 간섭 없음)
         self.after(100, lambda: self._bind_scroll_recursive(self.left_panel))
@@ -369,6 +386,12 @@ class App(ctk.CTk):
         }
         status_color = color_map.get(color, IOS_COLORS["text_secondary"])
         self.lbl_browser_status.configure(text=f"브라우저: {status}", text_color=status_color)
+        if self.use_webview2_panel:
+            if self.webview2_host and self.webview2_host.is_ready:
+                self.browser_center_container.grid_remove()
+            else:
+                self.browser_center_container.grid()
+            return
         if "연결됨" in status or "완료" in status:
             if self.embed_browser_windows:
                 if hasattr(self.logic, "is_chrome_embedded") and self.logic.is_chrome_embedded():
@@ -419,7 +442,78 @@ class App(ctk.CTk):
             max(1, placeholder_h),
         )
 
+    def _init_webview2_panel(self):
+        if not self.use_webview2_panel:
+            return
+        if WebView2PanelHost is None:
+            self.log_msg("⚠️ WebView2 모듈 로드 실패. Chrome 임베드 모드로 동작합니다.")
+            self.use_webview2_panel = False
+            return
+        self.webview2_host = WebView2PanelHost(self.log_msg)
+        if not self.webview2_host.is_available:
+            self.log_msg(f"⚠️ WebView2 사용 불가: {self.webview2_host.unavailable_reason}")
+            self.use_webview2_panel = False
+            self.webview2_host = None
+            return
+        self.log_msg("🌐 WebView2 내장 패널 초기화 준비")
+        self.update_browser_status("WebView2 준비 중...", "blue")
+        self.after(250, self._start_webview2_panel)
+
+    def _start_webview2_panel(self):
+        if not self.use_webview2_panel or not self.webview2_host:
+            return
+        self._cache_browser_embed_metrics(force_update=True)
+        _, _, w, h = self.get_browser_embed_client_rect()
+        started = self.webview2_host.start(
+            self.get_browser_embed_hwnd(),
+            (0, 0, w, h),
+            "https://nid.naver.com/nidlogin.login",
+        )
+        if not started:
+            self.log_msg(f"⚠️ WebView2 시작 실패: {self.webview2_host.last_error}")
+            self.use_webview2_panel = False
+            self.webview2_host = None
+            return
+        self._webview2_poll_count = 0
+        self.after(120, self._poll_webview2_ready)
+
+    def _poll_webview2_ready(self):
+        if not self.webview2_host:
+            return
+        self._webview2_poll_count += 1
+        if self.webview2_host.is_ready:
+            if not self._webview2_ready:
+                self._webview2_ready = True
+                self.browser_center_container.grid_remove()
+                self.update_browser_status("WebView2 연결됨", "green")
+                self.log_msg("🧩 WebView2 내장 브라우저 모드 활성화")
+            self._resize_webview2_panel()
+            return
+        if self._webview2_poll_count < 120:
+            self.after(120, self._poll_webview2_ready)
+            return
+        self.log_msg("⚠️ WebView2 준비 시간 초과. Chrome 임베드 모드로 동작합니다.")
+        self.use_webview2_panel = False
+        self.webview2_host = None
+
+    def _resize_webview2_panel(self):
+        if not self.webview2_host:
+            return
+        x, y, w, h = self.get_browser_embed_client_rect()
+        self.webview2_host.resize(x, y, w, h)
+
+    def _on_close(self):
+        try:
+            if self.webview2_host:
+                self.webview2_host.close()
+        except Exception:
+            pass
+        self.destroy()
+
     def _auto_open_login_page(self):
+        if self.use_webview2_panel:
+            self.log_msg("🔓 WebView2 패널에서 네이버 로그인을 진행하세요.")
+            return
         threading.Thread(target=self._thread_open_login_page, daemon=True).start()
 
     # ------------------------------------------------------------------
@@ -444,12 +538,19 @@ class App(ctk.CTk):
             return
         self._last_geometry = current_geometry
         self._last_update_time = current_time
+        if self.use_webview2_panel and self.webview2_host:
+            self._resize_webview2_panel()
+            return
         if self.logic and self.logic.driver and not self._position_update_scheduled:
             self._position_update_scheduled = True
             self.after(80, self._update_chrome_position)
 
     def _update_chrome_position(self):
         self._position_update_scheduled = False
+        if self.use_webview2_panel and self.webview2_host:
+            self._cache_browser_embed_metrics()
+            self._resize_webview2_panel()
+            return
         if not self.logic.driver:
             return
         try:
@@ -555,6 +656,18 @@ class App(ctk.CTk):
         if not k:
             self.log_msg("⚠️ 키워드를 입력하세요.")
             return
+        if self.use_webview2_panel:
+            if not self.webview2_host or not self.webview2_host.is_ready:
+                self.log_msg("⚠️ WebView2가 아직 준비되지 않았습니다. 잠시 후 다시 시도하세요.")
+                return
+            self._save_to_config()
+            query_url = f"https://search.naver.com/search.naver?where=blog&query={k}"
+            if self.webview2_host.navigate(query_url):
+                self.log_msg(f"🔍 WebView2 검색 이동: '{k}'")
+                self.update_browser_status(f"검색: {k}", "blue")
+            else:
+                self.log_msg("⚠️ WebView2 검색 이동 실패")
+            return
         self.btn_search.configure(state="disabled", text="검색 중...")
         self.update_idletasks()
         self.log_msg(f"🔍 '{k}' 검색 중...")
@@ -567,6 +680,9 @@ class App(ctk.CTk):
         self.after(0, lambda: self.btn_search.configure(state="normal", text="이동"))
 
     def on_start(self):
+        if self.use_webview2_panel:
+            self.log_msg("⚠️ WebView2 패널 1차 적용 상태입니다. 자동화 엔진 이관 전이라 '작업 시작'은 Chrome 모드에서만 지원합니다.")
+            return
         if self.logic.is_running:
             self.log_msg("⚠️ 이미 실행 중입니다.")
             return
@@ -605,6 +721,10 @@ class App(ctk.CTk):
         self.after(0, self._update_button_state)
 
     def _update_button_state(self):
+        if self.use_webview2_panel:
+            self.btn_start.configure(state="normal", text="작업 시작 (준비중)")
+            self.btn_stop.configure(state="disabled")
+            return
         if not self.logic.is_running:
             self.btn_start.configure(state="normal", text="작업 시작")
             self.btn_stop.configure(state="disabled")

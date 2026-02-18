@@ -15,6 +15,11 @@ if not exist config.json (
   python -c "import pathlib; pathlib.Path('config.json').write_text('{}\n', encoding='utf-8')"
 )
 
+if exist "WebView2Loader (1).dll" (
+  echo [INFO] Normalizing WebView2 loader filename...
+  copy /y "WebView2Loader (1).dll" "WebView2Loader.dll" >nul
+)
+
 echo [INFO] Closing running SeoiChuPro if exists...
 taskkill /F /IM SeoiChuPro.exe >nul 2>nul
 timeout /t 1 /nobreak >nul
@@ -48,25 +53,52 @@ exit /b 0
 
 :RUN_BUILD
 if exist fonts (
-  pyinstaller ^
-    --noconfirm ^
-    --clean ^
-    --windowed ^
-    --distpath "%DIST_OUT%" ^
-    --workpath "%WORK_OUT%" ^
-    --name "SeoiChuPro" ^
-    --add-data "config.json;." ^
-    --add-data "fonts;fonts" ^
-    main.py
+  if exist "WebView2Loader.dll" (
+    pyinstaller ^
+      --noconfirm ^
+      --clean ^
+      --windowed ^
+      --distpath "%DIST_OUT%" ^
+      --workpath "%WORK_OUT%" ^
+      --name "SeoiChuPro" ^
+      --add-data "config.json;." ^
+      --add-data "fonts;fonts" ^
+      --add-data "WebView2Loader.dll;." ^
+      main.py
+  ) else (
+    pyinstaller ^
+      --noconfirm ^
+      --clean ^
+      --windowed ^
+      --distpath "%DIST_OUT%" ^
+      --workpath "%WORK_OUT%" ^
+      --name "SeoiChuPro" ^
+      --add-data "config.json;." ^
+      --add-data "fonts;fonts" ^
+      main.py
+  )
 ) else (
-  pyinstaller ^
-    --noconfirm ^
-    --clean ^
-    --windowed ^
-    --distpath "%DIST_OUT%" ^
-    --workpath "%WORK_OUT%" ^
-    --name "SeoiChuPro" ^
-    --add-data "config.json;." ^
-    main.py
+  if exist "WebView2Loader.dll" (
+    pyinstaller ^
+      --noconfirm ^
+      --clean ^
+      --windowed ^
+      --distpath "%DIST_OUT%" ^
+      --workpath "%WORK_OUT%" ^
+      --name "SeoiChuPro" ^
+      --add-data "config.json;." ^
+      --add-data "WebView2Loader.dll;." ^
+      main.py
+  ) else (
+    pyinstaller ^
+      --noconfirm ^
+      --clean ^
+      --windowed ^
+      --distpath "%DIST_OUT%" ^
+      --workpath "%WORK_OUT%" ^
+      --name "SeoiChuPro" ^
+      --add-data "config.json;." ^
+      main.py
+  )
 )
 exit /b %errorlevel%

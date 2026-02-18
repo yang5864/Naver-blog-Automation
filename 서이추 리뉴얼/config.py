@@ -20,6 +20,7 @@ class AppConfig:
         "normal_wait": 0.5,
         "slow_wait": 1.0,
         "embed_browser_windows": True,
+        "use_webview2_panel": True,
     }
 
     def __init__(self):
