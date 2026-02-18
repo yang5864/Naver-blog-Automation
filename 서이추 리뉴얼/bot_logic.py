@@ -43,6 +43,8 @@ class NaverBotLogic:
         self._chrome_process_id = None
         self._chrome_user_data_dir = None
         self._embed_attempt_count = 0
+        self.webview2_host = None
+        self.webview2_mode = False
 
         # 성능 설정
         self.page_load_timeout = config.get("page_load_timeout")
@@ -57,6 +59,13 @@ class NaverBotLogic:
     def safe_sleep(self, seconds):
         if seconds > 0:
             time.sleep(seconds)
+
+    def set_webview2_host(self, host):
+        prev_mode = self.webview2_mode
+        self.webview2_host = host
+        self.webview2_mode = bool(host)
+        if prev_mode != self.webview2_mode:
+            self.driver = None
 
     def _close_tab_and_return(self, main_window):
         """현재 탭 닫고 메인 윈도우로 복귀."""
@@ -152,6 +161,72 @@ class NaverBotLogic:
     def _get_debug_port(self):
         return int(self.config.get("chrome_debug_port") or 9222)
 
+    def _attach_debugger_driver(self, debug_port):
+        debugger_address = f"127.0.0.1:{int(debug_port)}"
+
+        try:
+            from selenium.webdriver.edge.options import Options as EdgeOptions
+
+            edge_options = EdgeOptions()
+            edge_options.use_chromium = True
+            edge_options.add_experimental_option("debuggerAddress", debugger_address)
+            driver = webdriver.Edge(options=edge_options)
+            self.log("   ↪ msedgedriver attach 성공")
+            return driver
+        except Exception:
+            pass
+
+        try:
+            chrome_options = Options()
+            chrome_options.add_experimental_option("debuggerAddress", debugger_address)
+            driver = webdriver.Chrome(options=chrome_options)
+            self.log("   ↪ chromedriver attach 성공")
+            return driver
+        except Exception:
+            return None
+
+    def _connect_driver_webview2(self, force_restart=False):
+        if self.driver and not force_restart:
+            try:
+                _ = self.driver.current_url
+                return True
+            except WebDriverException:
+                self.driver = None
+
+        if not self.webview2_host:
+            self.log("❌ WebView2 자동화 대상이 없습니다.")
+            return False
+        if not self.webview2_host.is_ready:
+            self.log("❌ WebView2가 아직 준비되지 않았습니다.")
+            return False
+
+        debug_port = int(getattr(self.webview2_host, "devtools_port", 0) or 0)
+        if debug_port <= 0:
+            self.log("❌ WebView2 DevTools 포트를 찾을 수 없습니다.")
+            return False
+
+        for _ in range(40):
+            if self._is_debug_port_open(debug_port):
+                break
+            time.sleep(0.1)
+        if not self._is_debug_port_open(debug_port):
+            self.log(f"❌ WebView2 DevTools 포트 연결 실패: {debug_port}")
+            return False
+
+        self.log(f"🌐 WebView2 자동화 연결 시도: {debug_port}")
+        self.driver = self._attach_debugger_driver(debug_port)
+        if not self.driver:
+            self.log("❌ WebView2 자동화 연결 실패 (드라이버 attach 실패)")
+            return False
+
+        try:
+            self.driver.set_page_load_timeout(self.page_load_timeout)
+        except Exception:
+            pass
+
+        self.update_status("브라우저 연결됨", "green")
+        return True
+
     def _get_chrome_user_data_dir(self):
         if self._chrome_user_data_dir:
             return self._chrome_user_data_dir
@@ -194,6 +269,9 @@ class NaverBotLogic:
 
     def connect_driver(self, force_restart=False, initial_url=None):
         """크롬 연결 (GUI 오른쪽 패널 위치에 배치)"""
+        if self.webview2_mode:
+            return self._connect_driver_webview2(force_restart=force_restart)
+
         debug_port = self._get_debug_port()
 
         if self.driver and not force_restart:
@@ -913,6 +991,79 @@ class NaverBotLogic:
         except WebDriverException:
             return "댓글 실패"
 
+    def _run_single_tab_loop(self, keyword):
+        search_url = f"https://search.naver.com/search.naver?where=blog&query={keyword}"
+        processed_ids = set()
+        queue = []
+        consecutive_errors = 0
+
+        while self.is_running and self.current_count < self.target_count:
+            if not queue:
+                self.log(f"🔄 ID 수집 중... (처리 완료: {len(processed_ids)}명)")
+                if not self.safe_get(self.driver, search_url):
+                    self.log("❌ 검색 페이지 재진입 실패")
+                    break
+                self.safe_sleep(1.0)
+                self._click_blog_tab()
+                queue = self.collect_blog_ids(processed_ids)
+                if not queue:
+                    self.log("⚠️ 더 이상 수집할 블로그가 없습니다.")
+                    break
+                self.log(f"   ✅ {len(queue)}명 수집 완료!")
+
+            blog_id = queue.pop(0)
+            blacklist = {"myblog", "postlist", "buddyaddform", "likeit", "nvisitor", "blog", "domainid", "admin", "search"}
+            if blog_id.lower() in blacklist:
+                continue
+
+            self.log(f"\n▶️ [{self.current_count+1}/{self.target_count}] '{blog_id}' 작업 시작")
+            if not self.safe_get(self.driver, f"https://m.blog.naver.com/{blog_id}"):
+                self.log("   ❌ 페이지 로드 실패")
+                consecutive_errors += 1
+                if consecutive_errors >= 5:
+                    self.log("⚠️ 연속 5회 실패. 잠시 대기...")
+                    self.safe_sleep(5.0)
+                    consecutive_errors = 0
+                continue
+
+            self.safe_sleep(1.2)
+            consecutive_errors = 0
+
+            current_url = self.driver.current_url
+            page_source = self.driver.page_source
+            if "MobileErrorView" in current_url or "일시적인 오류" in page_source:
+                self.log("   ❌ 접근 불가 블로그 (Skip)")
+                continue
+
+            is_friend, msg_friend = self.process_neighbor(blog_id)
+            if is_friend == "DONE_DAY_LIMIT":
+                self.log("\n🎉 목표 달성! 오늘 할당량을 모두 채웠습니다!")
+                break
+            if is_friend == "STOP_GROUP_FULL":
+                self.log("\n⛔ 내 이웃 그룹이 가득 찼습니다.")
+                break
+
+            self.log(f"   └ 서이추: {msg_friend}")
+
+            if "BuddyAddForm" in self.driver.current_url:
+                self.safe_get(self.driver, f"https://m.blog.naver.com/{blog_id}")
+                self.safe_sleep(self.normal_wait)
+
+            if is_friend is True:
+                msg_like = self.process_like(self.driver)
+                self.log(f"   └ 공감: {msg_like}")
+
+                if "실패" not in msg_like and "없음" not in msg_like:
+                    msg_cmt = self.process_comment(self.driver, blog_id)
+                    self.log(f"   └ 댓글: {msg_cmt}")
+
+                self.current_count += 1
+                self.log(f"   ✅ 성공! (현재 {self.current_count}/{self.target_count})")
+                self.update_progress(self.current_count / self.target_count)
+
+            wait_time = random.uniform(0.8, 1.5)
+            self.safe_sleep(wait_time)
+
     # ------------------------------------------------------------------
     # 메인 자동화 루프
     # ------------------------------------------------------------------
@@ -937,9 +1088,18 @@ class NaverBotLogic:
 
         if not self._navigate_to_blog_search(keyword):
             self.log("❌ 검색 페이지 로드 실패")
+            self.is_running = False
+            self.update_status("검색 실패", "red")
             return
 
         self._click_blog_tab()
+
+        if self.webview2_mode:
+            self._run_single_tab_loop(keyword)
+            self.is_running = False
+            self.log("🏁 작업 종료")
+            self.update_status("작업 완료", "green")
+            return
 
         main_window = self.driver.current_window_handle
         processed_ids = set()

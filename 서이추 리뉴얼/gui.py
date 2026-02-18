@@ -225,8 +225,6 @@ class App(ctk.CTk):
         )
         self.btn_stop.pack(fill="x", padx=20, pady=(0, 20))
         self.btn_stop.configure(state="disabled")
-        if self.use_webview2_panel:
-            self.btn_start.configure(text="작업 시작 (준비중)")
 
         # ---- 진행률 카드 ----
         progress_frame = ctk.CTkFrame(
@@ -466,13 +464,19 @@ class App(ctk.CTk):
         if WebView2PanelHost is None:
             self.log_msg("⚠️ WebView2 모듈 로드 실패. Chrome 임베드 모드로 동작합니다.")
             self.use_webview2_panel = False
+            if hasattr(self.logic, "set_webview2_host"):
+                self.logic.set_webview2_host(None)
             return
         self.webview2_host = WebView2PanelHost(self.log_msg)
         if not self.webview2_host.is_available:
             self.log_msg(f"⚠️ WebView2 사용 불가: {self.webview2_host.unavailable_reason}")
             self.use_webview2_panel = False
             self.webview2_host = None
+            if hasattr(self.logic, "set_webview2_host"):
+                self.logic.set_webview2_host(None)
             return
+        if hasattr(self.logic, "set_webview2_host"):
+            self.logic.set_webview2_host(self.webview2_host)
         self.log_msg("🌐 WebView2 내장 패널 초기화 준비")
         self.update_browser_status("WebView2 준비 중...", "blue")
         self.after(250, self._start_webview2_panel)
@@ -516,6 +520,8 @@ class App(ctk.CTk):
         self.log_msg("⚠️ WebView2 준비 시간 초과. Chrome 임베드 모드로 동작합니다.")
         self.use_webview2_panel = False
         self.webview2_host = None
+        if hasattr(self.logic, "set_webview2_host"):
+            self.logic.set_webview2_host(None)
 
     def _resize_webview2_panel(self):
         if not self.webview2_host:
@@ -770,8 +776,8 @@ class App(ctk.CTk):
         self.after(0, lambda: self.btn_search.configure(state="normal", text="이동"))
 
     def on_start(self):
-        if self.use_webview2_panel:
-            self.log_msg("⚠️ WebView2 패널 1차 적용 상태입니다. 자동화 엔진 이관 전이라 '작업 시작'은 Chrome 모드에서만 지원합니다.")
+        if self.use_webview2_panel and (not self.webview2_host or not self.webview2_host.is_ready):
+            self.log_msg("⚠️ WebView2가 아직 준비되지 않았습니다. 잠시 후 다시 시도하세요.")
             return
         if self.logic.is_running:
             self.log_msg("⚠️ 이미 실행 중입니다.")
@@ -811,10 +817,6 @@ class App(ctk.CTk):
         self.after(0, self._update_button_state)
 
     def _update_button_state(self):
-        if self.use_webview2_panel:
-            self.btn_start.configure(state="normal", text="작업 시작 (준비중)")
-            self.btn_stop.configure(state="disabled")
-            return
         if not self.logic.is_running:
             self.btn_start.configure(state="normal", text="작업 시작")
             self.btn_stop.configure(state="disabled")

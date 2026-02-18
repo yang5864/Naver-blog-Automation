@@ -2,6 +2,8 @@ import os
 import platform
 import sys
 import ctypes
+import socket
+import re
 from ctypes import wintypes
 
 
@@ -66,6 +68,7 @@ class WebView2PanelHost:
         self._controller_handler_ptr = None
 
         self._last_error = ""
+        self._devtools_port = 0
 
     @property
     def is_ready(self):
@@ -83,6 +86,10 @@ class WebView2PanelHost:
     def last_error(self):
         return self._last_error
 
+    @property
+    def devtools_port(self):
+        return int(self._devtools_port or 0)
+
     def _set_error(self, message):
         self._last_error = str(message)
         self._log(f"⚠️ WebView2: {message}")
@@ -97,6 +104,37 @@ class WebView2PanelHost:
         dirs.append(os.path.dirname(os.path.abspath(__file__)))
         dirs.append(os.getcwd())
         return dirs
+
+    def _pick_free_port(self):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("127.0.0.1", 0))
+                s.listen(1)
+                return int(s.getsockname()[1])
+        except Exception:
+            return 0
+
+    def _ensure_devtools_args(self):
+        current = (os.environ.get("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "") or "").strip()
+        match = re.search(r"--remote-debugging-port=(\d+)", current)
+        if match:
+            try:
+                self._devtools_port = int(match.group(1))
+            except Exception:
+                self._devtools_port = 0
+        if not self._devtools_port:
+            env_port = (os.environ.get("WEBVIEW2_DEBUG_PORT", "") or "").strip()
+            if env_port.isdigit():
+                self._devtools_port = int(env_port)
+        if not self._devtools_port:
+            self._devtools_port = self._pick_free_port()
+        if not self._devtools_port:
+            return
+        flag = f"--remote-debugging-port={int(self._devtools_port)}"
+        if flag not in current:
+            next_args = f"{current} {flag}".strip()
+            os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = next_args
+        self._log_info(f"DevTools 포트: {int(self._devtools_port)}")
 
     def _resolve_loader_candidates(self):
         env_path = os.environ.get("WEBVIEW2_LOADER_PATH", "").strip()
@@ -143,6 +181,8 @@ class WebView2PanelHost:
 
         if not self._co_initialize():
             return False
+
+        self._ensure_devtools_args()
 
         self._parent_hwnd = int(parent_hwnd or 0)
         bx, by, bw, bh = bounds
