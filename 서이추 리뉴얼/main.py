@@ -5,6 +5,7 @@ import logging
 import customtkinter as ctk
 
 from config import AppConfig
+from font_setup import register_private_fonts
 from gui import App
 
 # macOS Tcl/Tk 호환성 경고만 선택 억제
@@ -23,6 +24,9 @@ ctk.set_default_color_theme("blue")
 
 
 def main():
+    loaded = register_private_fonts()
+    if loaded:
+        logging.info("Loaded private fonts: %s", loaded)
     config = AppConfig()
     app = App(config)
     app.mainloop()

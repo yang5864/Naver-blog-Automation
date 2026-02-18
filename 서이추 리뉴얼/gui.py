@@ -22,6 +22,14 @@ class App(ctk.CTk):
 
         self.logic = NaverBotLogic(config, self.log_msg, self.update_prog, self.update_browser_status, gui_window=self)
         self.embed_browser_windows = bool(self.config.get("embed_browser_windows")) and platform.system() == "Windows"
+        self._browser_embed_rect = (0, 0, 100, 100)
+        self._browser_embed_hwnd = 0
+        self._browser_embed_client_rect = (30, 30, 100, 100)
+
+        # 부드러운 스크롤 상태
+        self._scroll_velocity = 0.0
+        self._scroll_animating = False
+        self._scrollable_textboxes = []  # 독립 스크롤 대상 텍스트박스 목록
 
         # 좌우 분할 레이아웃
         self.grid_columnconfigure(0, weight=0)
@@ -75,14 +83,6 @@ class App(ctk.CTk):
         self.scrollable_frame.grid(row=1, column=0, sticky="nsew", padx=0, pady=0)
         self.scrollable_frame.grid_columnconfigure(0, weight=1)
 
-        # 마우스 휠 이벤트 바인딩
-        self.left_panel.bind("<MouseWheel>", self._on_mousewheel)
-        self.left_panel.bind("<Button-4>", self._on_mousewheel)
-        self.left_panel.bind("<Button-5>", self._on_mousewheel)
-        self.scrollable_frame.bind("<MouseWheel>", self._on_mousewheel)
-        self.scrollable_frame.bind("<Button-4>", self._on_mousewheel)
-        self.scrollable_frame.bind("<Button-5>", self._on_mousewheel)
-
         # ---- 로그인 카드 ----
         self.frame_login = ctk.CTkFrame(
             self.scrollable_frame, fg_color=IOS_COLORS["card"], corner_radius=16
@@ -93,40 +93,20 @@ class App(ctk.CTk):
             self.frame_login, text="로그인", font=IOS_FONT_MEDIUM, text_color=IOS_COLORS["text_primary"]
         ).pack(anchor="w", padx=20, pady=(20, 14))
 
-        self.entry_id = ctk.CTkEntry(
+        ctk.CTkLabel(
             self.frame_login,
-            placeholder_text="네이버 ID",
-            corner_radius=10,
-            height=48,
+            text="프로그램 실행 시 로그인 페이지가 자동으로 열립니다.",
             font=IOS_FONT_REGULAR,
-            fg_color=IOS_COLORS["input_bg"],
-            border_width=0,
-        )
-        self.entry_id.pack(fill="x", padx=20, pady=(0, 10))
+            text_color=IOS_COLORS["text_secondary"],
+        ).pack(anchor="w", padx=20, pady=(0, 10))
 
-        self.entry_pw = ctk.CTkEntry(
+        self.lbl_login_hint = ctk.CTkLabel(
             self.frame_login,
-            placeholder_text="비밀번호",
-            show="*",
-            corner_radius=10,
-            height=48,
-            font=IOS_FONT_REGULAR,
-            fg_color=IOS_COLORS["input_bg"],
-            border_width=0,
+            text="로그인 완료 후 '작업 시작'을 누르세요.",
+            font=IOS_FONT_SMALL,
+            text_color=IOS_COLORS["text_secondary"],
         )
-        self.entry_pw.pack(fill="x", padx=20, pady=(0, 20))
-
-        self.btn_login = ctk.CTkButton(
-            self.frame_login,
-            text="로그인",
-            command=self.on_login,
-            fg_color=IOS_COLORS["primary"],
-            hover_color="#0051D5",
-            corner_radius=12,
-            height=50,
-            font=("SF Pro Text", 16, "bold"),
-        )
-        self.btn_login.pack(fill="x", padx=20, pady=(0, 20))
+        self.lbl_login_hint.pack(anchor="w", padx=20, pady=(0, 18))
 
         # ---- 검색 카드 ----
         self.frame_search = ctk.CTkFrame(
@@ -172,26 +152,6 @@ class App(ctk.CTk):
         ctk.CTkLabel(
             self.frame_settings, text="설정", font=IOS_FONT_MEDIUM, text_color=IOS_COLORS["text_primary"]
         ).pack(anchor="w", padx=20, pady=(20, 14))
-
-        # 내 블로그 ID
-        blog_id_row = ctk.CTkFrame(self.frame_settings, fg_color="transparent")
-        blog_id_row.pack(fill="x", padx=20, pady=(0, 10))
-        ctk.CTkLabel(blog_id_row, text="내 블로그 ID", font=IOS_FONT_REGULAR, text_color=IOS_COLORS["text_primary"]).pack(side="left")
-        self.entry_blog_id = ctk.CTkEntry(
-            blog_id_row, placeholder_text="블로그 ID", width=160, corner_radius=10, height=40,
-            font=IOS_FONT_REGULAR, justify="center", fg_color=IOS_COLORS["input_bg"], border_width=0,
-        )
-        self.entry_blog_id.pack(side="right")
-
-        # 내 닉네임
-        nickname_row = ctk.CTkFrame(self.frame_settings, fg_color="transparent")
-        nickname_row.pack(fill="x", padx=20, pady=(0, 10))
-        ctk.CTkLabel(nickname_row, text="내 닉네임", font=IOS_FONT_REGULAR, text_color=IOS_COLORS["text_primary"]).pack(side="left")
-        self.entry_nickname = ctk.CTkEntry(
-            nickname_row, placeholder_text="닉네임", width=160, corner_radius=10, height=40,
-            font=IOS_FONT_REGULAR, justify="center", fg_color=IOS_COLORS["input_bg"], border_width=0,
-        )
-        self.entry_nickname.pack(side="right")
 
         # 목표 개수
         target_row = ctk.CTkFrame(self.frame_settings, fg_color="transparent")
@@ -292,6 +252,9 @@ class App(ctk.CTk):
         )
         self.txt_log.grid(row=1, column=0, padx=20, pady=(0, 20), sticky="nsew")
 
+        # 독립 스크롤 대상 텍스트박스 등록
+        self._scrollable_textboxes = [self.txt_log, self.txt_msg, self.txt_cmt]
+
         # ========== 오른쪽 패널 (브라우저 화면 영역) ==========
         self.right_panel = ctk.CTkFrame(
             self, fg_color=IOS_COLORS["background"], corner_radius=0
@@ -324,29 +287,27 @@ class App(ctk.CTk):
         ).pack(pady=(0, 50))
 
         # GUI 창 이동 감지
-        self._last_position = None
-        self._position_update_thread = None
+        self._last_geometry = None
+        self._position_update_scheduled = False
         self._last_update_time = 0
-        self._update_throttle = 0.5
+        self._update_throttle = 0.2
         self.bind("<Configure>", self._on_window_move)
 
         # config에서 값 복원
         self._load_from_config()
+        self._cache_browser_embed_metrics(force_update=True)
         self.log_msg("프로그램 준비 완료.")
+
+        # 마우스 휠: bind_all 대신 왼쪽 패널 위젯에만 직접 바인딩 (클릭 간섭 없음)
+        self.after(100, lambda: self._bind_scroll_recursive(self.left_panel))
+
+        self.after(300, self._auto_open_login_page)
 
     # ------------------------------------------------------------------
     # config 로드/저장
     # ------------------------------------------------------------------
     def _load_from_config(self):
         """config에서 GUI 필드 복원."""
-        blog_id = self.config.get("my_blog_id")
-        if blog_id:
-            self.entry_blog_id.insert(0, blog_id)
-
-        nickname = self.config.get("my_nickname")
-        if nickname:
-            self.entry_nickname.insert(0, nickname)
-
         keyword = self.config.get("keyword")
         if keyword:
             self.entry_keyword.insert(0, keyword)
@@ -364,8 +325,6 @@ class App(ctk.CTk):
 
     def _save_to_config(self):
         """GUI 값을 config에 저장하고 JSON 기록."""
-        self.config.set("my_blog_id", self.entry_blog_id.get().strip())
-        self.config.set("my_nickname", self.entry_nickname.get().strip())
         self.config.set("keyword", self.entry_keyword.get().strip())
         try:
             self.config.set("target_count", int(self.entry_target.get() or "100"))
@@ -424,8 +383,42 @@ class App(ctk.CTk):
 
     def get_browser_embed_hwnd(self):
         """Windows에서 브라우저 임베드 대상 HWND 반환."""
-        self.update_idletasks()
-        return int(self.browser_placeholder.winfo_id())
+        return int(self._browser_embed_hwnd)
+
+    def get_browser_embed_rect(self):
+        """브라우저 카드의 절대 좌표/크기 반환."""
+        return self._browser_embed_rect
+
+    def get_browser_embed_client_rect(self):
+        """임베드 부모(hwnd) 기준 브라우저 영역 상대 좌표."""
+        return self._browser_embed_client_rect
+
+    def _cache_browser_embed_metrics(self, force_update=False):
+        if force_update:
+            self.update_idletasks()
+        panel_root_x = int(self.right_panel.winfo_rootx())
+        panel_root_y = int(self.right_panel.winfo_rooty())
+        placeholder_root_x = int(self.browser_placeholder.winfo_rootx())
+        placeholder_root_y = int(self.browser_placeholder.winfo_rooty())
+        placeholder_w = int(self.browser_placeholder.winfo_width())
+        placeholder_h = int(self.browser_placeholder.winfo_height())
+
+        self._browser_embed_rect = (
+            placeholder_root_x,
+            placeholder_root_y,
+            placeholder_w,
+            placeholder_h,
+        )
+        self._browser_embed_hwnd = int(self.right_panel.winfo_id())
+        self._browser_embed_client_rect = (
+            max(0, placeholder_root_x - panel_root_x),
+            max(0, placeholder_root_y - panel_root_y),
+            max(100, placeholder_w),
+            max(100, placeholder_h),
+        )
+
+    def _auto_open_login_page(self):
+        threading.Thread(target=self._thread_open_login_page, daemon=True).start()
 
     # ------------------------------------------------------------------
     # 이벤트 핸들러
@@ -436,91 +429,124 @@ class App(ctk.CTk):
         current_time = time.time()
         if current_time - self._last_update_time < self._update_throttle:
             return
+        self._cache_browser_embed_metrics()
         try:
             current_x = self.winfo_x()
             current_y = self.winfo_y()
+            current_w = self.winfo_width()
+            current_h = self.winfo_height()
         except Exception:
             return
-        if self._last_position and self._last_position == (current_x, current_y):
+        current_geometry = (current_x, current_y, current_w, current_h)
+        if self._last_geometry and self._last_geometry == current_geometry:
             return
-        self._last_position = (current_x, current_y)
+        self._last_geometry = current_geometry
         self._last_update_time = current_time
-        if self.logic and self.logic.driver:
-            if self._position_update_thread is None or not self._position_update_thread.is_alive():
-                self._position_update_thread = threading.Thread(target=self._update_chrome_position, daemon=True)
-                self._position_update_thread.start()
+        if self.logic and self.logic.driver and not self._position_update_scheduled:
+            self._position_update_scheduled = True
+            self.after(80, self._update_chrome_position)
 
     def _update_chrome_position(self):
-        time.sleep(0.2)
-        if self.logic.driver:
-            try:
-                self.logic._position_chrome_window(self)
-            except Exception:
-                pass
-
-    def _on_mousewheel(self, event):
+        self._position_update_scheduled = False
+        if not self.logic.driver:
+            return
         try:
-            widget = event.widget
-            if widget != self.left_panel and widget != self.scrollable_frame:
-                parent = widget
-                while parent:
-                    if parent == self.left_panel or parent == self.scrollable_frame:
-                        break
-                    try:
-                        parent = parent.master
-                    except Exception:
-                        break
-                else:
-                    return
-
-            if platform.system() == "Darwin":
-                delta = event.delta
-            elif event.num == 4:
-                delta = 1
-            elif event.num == 5:
-                delta = -1
-            else:
-                delta = event.delta // 120
-
-            if hasattr(self.scrollable_frame, "_parent_canvas"):
-                self.scrollable_frame._parent_canvas.yview_scroll(int(-delta), "units")
+            self._cache_browser_embed_metrics()
+            self.logic._position_chrome_window(self)
         except Exception:
             pass
+
+    def _bind_scroll_recursive(self, widget):
+        """위젯과 모든 자식에게 마우스 휠 바인딩 (bind_all 없이)."""
+        widget.bind("<MouseWheel>", self._on_mousewheel, add="+")
+        for child in widget.winfo_children():
+            self._bind_scroll_recursive(child)
+
+    def _on_mousewheel(self, event):
+        # 독립 스크롤 텍스트박스 위인지 확인
+        widget_path = str(event.widget)
+        for tb in self._scrollable_textboxes:
+            tb_path = str(tb)
+            if widget_path == tb_path or widget_path.startswith(tb_path + "."):
+                return self._scroll_textbox(tb, event)
+
+        # 메인 패널 스크롤
+        self._handle_panel_scroll(event)
+
+    def _scroll_textbox(self, textbox, event):
+        """텍스트박스를 독립적으로 스크롤. 끝에 도달하면 부모 패널로 전파."""
+        delta = event.delta if platform.system() == "Darwin" else event.delta / 120
+        scrolling_up = delta > 0
+
+        top, bottom = textbox._textbox.yview()
+
+        if (scrolling_up and top <= 0.0) or (not scrolling_up and bottom >= 1.0):
+            self._handle_panel_scroll(event)
+            return
+
+        units = -1 if scrolling_up else 1
+        textbox._textbox.yview_scroll(units * 2, "units")
+
+    def _handle_panel_scroll(self, event):
+        """왼쪽 패널 부드러운 스크롤."""
+        if platform.system() == "Darwin":
+            delta = event.delta
+        else:
+            delta = event.delta / 120 * 4 if getattr(event, "delta", 0) else 0
+
+        if delta == 0:
+            return
+
+        self._scroll_velocity += delta * -1.2
+
+        if not self._scroll_animating:
+            self._scroll_animating = True
+            self._animate_scroll()
+
+    def _animate_scroll(self):
+        if not self._scroll_animating:
+            return
+        try:
+            canvas = self.scrollable_frame._parent_canvas
+
+            if abs(self._scroll_velocity) < 0.5:
+                self._scroll_velocity = 0.0
+                self._scroll_animating = False
+                return
+
+            top, bottom = canvas.yview()
+            visible_fraction = bottom - top
+
+            if visible_fraction >= 1.0:
+                self._scroll_velocity = 0.0
+                self._scroll_animating = False
+                return
+
+            total_height = canvas.winfo_height() / visible_fraction
+            new_top = top + self._scroll_velocity / total_height
+            new_top = max(0.0, min(1.0 - visible_fraction, new_top))
+
+            canvas.yview_moveto(new_top)
+
+            if (new_top <= 0.0 and self._scroll_velocity < 0) or \
+               (new_top >= 1.0 - visible_fraction and self._scroll_velocity > 0):
+                self._scroll_velocity = 0.0
+                self._scroll_animating = False
+                return
+
+            self._scroll_velocity *= 0.82
+            self.after(16, self._animate_scroll)
+        except Exception:
+            self._scroll_velocity = 0.0
+            self._scroll_animating = False
 
     # ------------------------------------------------------------------
     # 버튼 액션
     # ------------------------------------------------------------------
-    def on_login(self):
-        uid = self.entry_id.get()
-        upw = self.entry_pw.get()
-        if not uid or not upw:
-            self.log_msg("⚠️ 아이디/비번을 입력하세요.")
-            return
-        self.btn_login.configure(state="disabled", text="로그인 중...")
-        self.update_idletasks()
-        self.log_msg("🔐 로그인 시도 중...")
-        threading.Thread(target=self._thread_login, args=(uid, upw), daemon=True).start()
-
-    def _thread_login(self, u, p):
-        # 로그인 전에 blog_id/nickname 반영
-        blog_id = self.entry_blog_id.get().strip()
-        nickname = self.entry_nickname.get().strip()
-        if blog_id:
-            self.logic.my_blog_id = blog_id
-        if nickname:
-            self.logic.my_nickname = nickname
-
-        if not self.logic.driver:
-            if not self.logic.connect_driver():
-                self.after(0, lambda: self.btn_login.configure(state="normal", text="로그인"))
-                return
-        if self.logic.login(u, p):
-            self.after(0, lambda: self.btn_login.configure(
-                state="normal", text="로그인 완료",
-                fg_color=IOS_COLORS["text_secondary"], hover_color=IOS_COLORS["text_secondary"],
-            ))
-        else:
-            self.after(0, lambda: self.btn_login.configure(state="normal", text="로그인"))
+    def _thread_open_login_page(self):
+        ok = self.logic.open_login_page()
+        if ok:
+            self.log_msg("🔓 브라우저에서 네이버 로그인을 진행하세요.")
 
     def on_search(self):
         k = self.entry_keyword.get()
@@ -548,18 +574,8 @@ class App(ctk.CTk):
             self.log_msg("⚠️ 검색 키워드를 입력하세요.")
             return
 
-        # 블로그 ID 검증
-        blog_id = self.entry_blog_id.get().strip()
-        if not blog_id:
-            self.log_msg("⚠️ 설정에서 '내 블로그 ID'를 입력하세요.")
-            return
-
         # GUI → config → JSON 저장
         self._save_to_config()
-
-        # logic에 최신 설정 반영
-        self.logic.my_blog_id = self.config.get("my_blog_id")
-        self.logic.my_nickname = self.config.get("my_nickname")
 
         try:
             target_count = int(self.entry_target.get() or "100")

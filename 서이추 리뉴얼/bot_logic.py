@@ -1,17 +1,14 @@
-import sys
 import time
 import random
 import re
 import os
 import subprocess
 import platform
-
-import pyperclip
+import socket
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import (
@@ -36,8 +33,6 @@ class NaverBotLogic:
         self.gui_window = gui_window
         self.target_count = config.get("target_count")
         self.current_count = 0
-        self.my_blog_id = config.get("my_blog_id")
-        self.my_nickname = config.get("my_nickname")
         self.neighbor_msg = config.get("neighbor_msg")
         self.comment_msg = config.get("comment_msg")
         self.embed_browser_windows = bool(config.get("embed_browser_windows"))
@@ -144,7 +139,40 @@ class NaverBotLogic:
     # ------------------------------------------------------------------
     # 크롬 연결
     # ------------------------------------------------------------------
-    def connect_driver(self, force_restart=False):
+    def _is_debug_port_open(self, port):
+        try:
+            with socket.create_connection(("127.0.0.1", int(port)), timeout=0.2):
+                return True
+        except OSError:
+            return False
+
+    def _launch_chrome_process(self, debug_port, initial_url=None):
+        user_data_dir = os.path.expanduser("~/ChromeBotData")
+        chrome_path = AppConfig.get_chrome_path()
+
+        if self.gui_window:
+            chrome_x, chrome_y, chrome_width, chrome_height = self._get_browser_bounds(self.gui_window)
+        else:
+            chrome_x, chrome_y = 800, 0
+            chrome_width, chrome_height = 1000, 900
+
+        cmd = [
+            chrome_path,
+            f"--remote-debugging-port={debug_port}",
+            f"--user-data-dir={user_data_dir}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            f"--window-size={chrome_width},{chrome_height}",
+            f"--window-position={chrome_x},{chrome_y}",
+        ]
+        if initial_url:
+            cmd.append(initial_url)
+
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self._chrome_process_id = proc.pid
+        return True
+
+    def connect_driver(self, force_restart=False, initial_url=None):
         """크롬 연결 (GUI 오른쪽 패널 위치에 배치)"""
         debug_port = self.config.get("chrome_debug_port")
 
@@ -160,11 +188,27 @@ class NaverBotLogic:
 
         self.log("🖥️ 크롬 브라우저 실행 중...")
         try:
-            chrome_options = Options()
-            chrome_options.add_experimental_option("debuggerAddress", f"127.0.0.1:{debug_port}")
-            chrome_options.page_load_strategy = "eager"
+            # 포트가 닫혀있으면 먼저 크롬부터 즉시 띄워 체감 속도를 높임
+            if not self._is_debug_port_open(debug_port):
+                self._launch_chrome_process(debug_port, initial_url=initial_url)
 
-            self.driver = webdriver.Chrome(options=chrome_options)
+            # 디버그 포트 준비 후 attach
+            self.driver = None
+            for _ in range(40):
+                try:
+                    chrome_options = Options()
+                    chrome_options.add_experimental_option("debuggerAddress", f"127.0.0.1:{debug_port}")
+                    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+                    chrome_options.add_experimental_option("useAutomationExtension", False)
+                    chrome_options.page_load_strategy = "eager"
+                    self.driver = webdriver.Chrome(options=chrome_options)
+                    break
+                except WebDriverException:
+                    time.sleep(0.1)
+
+            if not self.driver:
+                raise RuntimeError("크롬 디버그 포트 연결 실패")
+
             self.driver.set_page_load_timeout(self.page_load_timeout)
 
             if self.gui_window:
@@ -173,62 +217,11 @@ class NaverBotLogic:
             self.log("✅ 브라우저 연결 성공!")
             self.update_status("브라우저 연결됨", "green")
             return True
-        except WebDriverException:
-            self.log("⚠️ 새 브라우저 창을 엽니다...")
-            try:
-                user_data_dir = os.path.expanduser("~/ChromeBotData")
-                chrome_path = AppConfig.get_chrome_path()
-
-                if self.gui_window:
-                    self.gui_window.update_idletasks()
-                    gui_x = self.gui_window.winfo_x()
-                    gui_y = self.gui_window.winfo_y()
-                    gui_width = self.gui_window.winfo_width()
-                    gui_height = self.gui_window.winfo_height()
-                    left_panel_width = 420
-                    padding_x = 15
-                    padding_y = 0
-                    chrome_x = gui_x + left_panel_width + padding_x
-                    chrome_y = gui_y + padding_y
-                    chrome_width = gui_width - left_panel_width - (padding_x * 2)
-                    chrome_height = gui_height
-                else:
-                    chrome_x, chrome_y = 800, 0
-                    chrome_width = 1000
-                    chrome_height = 900
-
-                cmd = [
-                    chrome_path,
-                    f"--remote-debugging-port={debug_port}",
-                    f"--user-data-dir={user_data_dir}",
-                    "--no-first-run",
-                    "--no-default-browser-check",
-                    f"--window-size={chrome_width},{chrome_height}",
-                    f"--window-position={chrome_x},{chrome_y}",
-                    "--disable-blink-features=AutomationControlled",
-                ]
-
-                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                self._chrome_process_id = proc.pid
-                time.sleep(2.5)
-
-                chrome_options = Options()
-                chrome_options.add_experimental_option("debuggerAddress", f"127.0.0.1:{debug_port}")
-                chrome_options.page_load_strategy = "eager"
-                self.driver = webdriver.Chrome(options=chrome_options)
-                self.driver.set_page_load_timeout(self.page_load_timeout)
-
-                if self.gui_window:
-                    self._position_chrome_window(self.gui_window)
-
-                self.log("✅ 새 브라우저 연결 성공!")
-                self.update_status("브라우저 연결됨", "green")
-                return True
-            except Exception as e:
-                self.log(f"❌ 실행 실패: {e}")
-                self.driver = None
-                self.update_status("브라우저 연결 실패", "red")
-                return False
+        except Exception as e:
+            self.log(f"❌ 실행 실패: {e}")
+            self.driver = None
+            self.update_status("브라우저 연결 실패", "red")
+            return False
 
     def _position_chrome_window(self, gui_window=None):
         """크롬 창을 GUI 영역에 맞게 배치 (Windows는 임베드 모드 지원)."""
@@ -249,20 +242,23 @@ class NaverBotLogic:
             self.log(f"⚠️ 창 위치 조정 실패: {str(e)[:30]}")
 
     def _get_browser_bounds(self, gui_window):
-        gui_window.update_idletasks()
-        gui_x = gui_window.winfo_x()
-        gui_y = gui_window.winfo_y()
-        gui_width = gui_window.winfo_width()
-        gui_height = gui_window.winfo_height()
-
-        left_panel_width = 420
-        padding_x = 15
-        padding_y = 0
-
-        chrome_x = gui_x + left_panel_width + padding_x
-        chrome_y = gui_y + padding_y
-        chrome_width = gui_width - left_panel_width - (padding_x * 2)
-        chrome_height = gui_height
+        if hasattr(gui_window, "get_browser_embed_rect"):
+            rx, ry, rw, rh = gui_window.get_browser_embed_rect()
+            chrome_x = int(rx)
+            chrome_y = int(ry)
+            chrome_width = int(rw)
+            chrome_height = int(rh)
+        else:
+            gui_x = gui_window.winfo_x()
+            gui_y = gui_window.winfo_y()
+            gui_width = gui_window.winfo_width()
+            gui_height = gui_window.winfo_height()
+            left_panel_width = 420
+            padding_x = 15
+            chrome_x = gui_x + left_panel_width + padding_x
+            chrome_y = gui_y
+            chrome_width = gui_width - left_panel_width - (padding_x * 2)
+            chrome_height = gui_height
         return chrome_x, chrome_y, chrome_width, chrome_height
 
     def _ensure_chrome_embedded(self, gui_window, chrome_x, chrome_y, chrome_width, chrome_height):
@@ -281,13 +277,22 @@ class NaverBotLogic:
         if not target_hwnd:
             return False
 
+        embed_client_rect = None
+        if hasattr(gui_window, "get_browser_embed_client_rect"):
+            embed_client_rect = gui_window.get_browser_embed_client_rect()
+
         user32 = ctypes.windll.user32
         GWL_STYLE = -16
         WS_CHILD = 0x40000000
         WS_POPUP = 0x80000000
+        WS_CAPTION = 0x00C00000
+        WS_THICKFRAME = 0x00040000
+        WS_MINIMIZEBOX = 0x00020000
+        WS_MAXIMIZEBOX = 0x00010000
+        WS_SYSMENU = 0x00080000
         SWP_NOZORDER = 0x0004
         SWP_NOACTIVATE = 0x0010
-        SW_MAXIMIZE = 3
+        SW_SHOW = 5
 
         if not self._embedded_chrome_hwnd:
             hwnd = self._find_chrome_hwnd(user32, chrome_x, chrome_y, chrome_width, chrome_height)
@@ -296,8 +301,11 @@ class NaverBotLogic:
 
             style = user32.GetWindowLongW(hwnd, GWL_STYLE)
             style = (style | WS_CHILD) & ~WS_POPUP
+            style = style & ~WS_CAPTION & ~WS_THICKFRAME & ~WS_MINIMIZEBOX & ~WS_MAXIMIZEBOX & ~WS_SYSMENU
             user32.SetWindowLongW(hwnd, GWL_STYLE, style)
             user32.SetParent(hwnd, target_hwnd)
+            if user32.GetParent(hwnd) != target_hwnd:
+                return False
             self._embedded_chrome_hwnd = hwnd
             self._embed_parent_hwnd = target_hwnd
             self.log("🧩 Windows 내장 브라우저 모드 활성화")
@@ -305,16 +313,32 @@ class NaverBotLogic:
         # 부모가 바뀐 경우 재설정
         if self._embed_parent_hwnd != target_hwnd:
             user32.SetParent(self._embedded_chrome_hwnd, target_hwnd)
+            if user32.GetParent(self._embedded_chrome_hwnd) != target_hwnd:
+                return False
             self._embed_parent_hwnd = target_hwnd
 
-        user32.ShowWindow(self._embedded_chrome_hwnd, SW_MAXIMIZE)
+        user32.ShowWindow(self._embedded_chrome_hwnd, SW_SHOW)
+        if embed_client_rect:
+            x, y, w, h = embed_client_rect
+            inset = 6
+            pos_x = max(0, int(x) + inset)
+            pos_y = max(0, int(y) + inset)
+            width = max(100, int(w) - (inset * 2))
+            height = max(100, int(h) - (inset * 2))
+        else:
+            inset = 6
+            pos_x = inset
+            pos_y = inset
+            width = max(100, int(chrome_width) - (inset * 2))
+            height = max(100, int(chrome_height) - (inset * 2))
+
         user32.SetWindowPos(
             self._embedded_chrome_hwnd,
             0,
-            0,
-            0,
-            max(100, int(chrome_width)),
-            max(100, int(chrome_height)),
+            pos_x,
+            pos_y,
+            width,
+            height,
             SWP_NOZORDER | SWP_NOACTIVATE,
         )
         return True
@@ -372,18 +396,9 @@ class NaverBotLogic:
         if not self.driver:
             return False
         try:
-            if not self.safe_get(self.driver, f"https://m.blog.naver.com/{self.my_blog_id}"):
+            current_url = (self.driver.current_url or "").lower()
+            if "nid.naver.com/nidlogin" in current_url:
                 return False
-            self.safe_sleep(1.0)
-
-            page_source = self.driver.page_source
-            current_url = self.driver.current_url
-
-            if "nidlogin" in current_url or "login" in current_url.lower():
-                return False
-            if "글쓰기" in page_source or "write" in page_source.lower():
-                return True
-
             cookies = self.driver.get_cookies()
             for cookie in cookies:
                 if cookie.get("name") in ("NID_AUT", "NID_SES"):
@@ -392,62 +407,30 @@ class NaverBotLogic:
         except WebDriverException:
             return False
 
-    def login(self, uid, upw):
-        if not self.connect_driver():
+    def open_login_page(self):
+        login_url = "https://nid.naver.com/nidlogin.login"
+        debug_port = self.config.get("chrome_debug_port")
+
+        # 먼저 로그인 URL로 크롬 프로세스를 띄워 UI 노출 속도를 우선 확보
+        if not self.driver and not self._is_debug_port_open(debug_port):
+            try:
+                self._launch_chrome_process(debug_port, initial_url=login_url)
+            except Exception:
+                pass
+
+        if not self.connect_driver(initial_url=login_url):
             return False
 
-        self.log("🌐 네이버 접속 중...")
+        self.log("🌐 네이버 로그인 페이지 열기...")
         try:
-            self.driver.get("https://www.naver.com")
-            self.safe_sleep(0.5)
-
-            if self.check_login_status():
-                self.log("✅ 이미 로그인 되어 있습니다!")
-                self.update_status("로그인 완료", "green")
-                return True
-
-            self.log("🔑 로그인 페이지 이동...")
-            self.driver.get("https://nid.naver.com/nidlogin.login")
-
-            wait = WebDriverWait(self.driver, 10)
-            elem_id = wait.until(EC.presence_of_element_located((By.ID, "id")))
-
-            cmd_key = Keys.COMMAND if sys.platform == "darwin" else Keys.CONTROL
-
-            self.log("⌨️ 정보 입력 중...")
-            elem_id.click()
-            elem_id.send_keys(cmd_key, "a")
-            elem_id.send_keys(Keys.DELETE)
-            pyperclip.copy(uid)
-            elem_id.send_keys(cmd_key, "v")
-            self.safe_sleep(0.2)
-
-            elem_pw = self.driver.find_element(By.ID, "pw")
-            elem_pw.click()
-            elem_pw.send_keys(cmd_key, "a")
-            elem_pw.send_keys(Keys.DELETE)
-            pyperclip.copy(upw)
-            elem_pw.send_keys(cmd_key, "v")
-            self.safe_sleep(0.2)
-
-            self.driver.find_element(By.ID, "log.login").click()
-            self.log("⏳ 로그인 처리 중...")
-
-            try:
-                WebDriverWait(self.driver, 10).until(
-                    EC.url_changes("https://nid.naver.com/nidlogin.login")
-                )
-                self.log("✅ 로그인 성공!")
-                self.update_status("로그인 완료", "green")
-                return True
-            except TimeoutException:
-                self.log("ℹ️ 2단계 인증이나 캡차가 떴습니다. 직접 해결해주세요.")
-                self.update_status("인증 필요", "orange")
-                return False
+            if "nid.naver.com/nidlogin.login" not in (self.driver.current_url or ""):
+                self.driver.get(login_url)
+            self.update_status("로그인 페이지", "blue")
+            return True
         except Exception as e:
-            self.log(f"❌ 로그인 에러: {str(e)[:30]}")
+            self.log(f"❌ 로그인 페이지 이동 실패: {str(e)[:30]}")
             self.driver = None
-            self.update_status("로그인 실패", "red")
+            self.update_status("브라우저 오류", "red")
             return False
 
     def search_keyword(self, keyword):
@@ -470,7 +453,6 @@ class NaverBotLogic:
     def collect_blog_ids(self, processed_ids):
         queue = []
         blacklist = {"myblog", "postlist", "buddyaddform", "likeit", "nvisitor", "blog", "domainid", "admin", "search"}
-        my_id_clean = self.my_blog_id.strip().lower()
 
         scroll_attempts = 0
         max_scroll = 7
@@ -496,7 +478,7 @@ class NaverBotLogic:
                         bid = match.group(1)
                         bid_lower = bid.lower()
 
-                        if bid_lower in blacklist or bid_lower == my_id_clean:
+                        if bid_lower in blacklist:
                             continue
                         if bid in processed_ids or len(bid) <= 3:
                             continue
@@ -745,14 +727,6 @@ class NaverBotLogic:
             self.safe_click(driver, comment_btn)
             self.safe_sleep(self.normal_wait)
 
-            try:
-                existing_nicks = driver.find_elements(By.CSS_SELECTOR, "span.u_cbox_nick")
-                for nick_el in existing_nicks:
-                    if self.my_nickname == nick_el.text.strip():
-                        return "스킵(이미 댓글 씀)"
-            except (NoSuchElementException, StaleElementReferenceException):
-                pass
-
             input_box = self.safe_find_element(
                 driver, By.CSS_SELECTOR, ".u_cbox_text_mention, .u_cbox_inbox textarea", timeout=3
             )
@@ -858,7 +832,7 @@ class NaverBotLogic:
 
             blog_id = queue.pop(0)
             blacklist = {"myblog", "postlist", "buddyaddform", "likeit", "nvisitor", "blog", "domainid", "admin", "search"}
-            if blog_id.lower() == self.my_blog_id.lower() or blog_id.lower() in blacklist:
+            if blog_id.lower() in blacklist:
                 continue
 
             self.log(f"\n▶️ [{self.current_count+1}/{self.target_count}] '{blog_id}' 작업 시작")
