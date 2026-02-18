@@ -237,6 +237,15 @@ class WebView2PanelHost:
             self._set_error(f"Navigate 실패: {exc}")
             return False
 
+    def release_focus(self):
+        if not self._controller:
+            return
+        try:
+            # COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC = 0
+            self._controller.MoveFocus(0)
+        except Exception:
+            pass
+
     def close(self):
         try:
             if self._controller:

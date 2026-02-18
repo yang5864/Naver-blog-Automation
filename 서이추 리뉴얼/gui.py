@@ -32,8 +32,6 @@ class App(ctk.CTk):
         self._browser_embed_rect = (0, 0, 100, 100)
         self._browser_embed_hwnd = 0
         self._browser_embed_client_rect = (0, 0, 100, 100)
-        self._webview_parent_hwnd = 0
-        self._webview_bounds = (0, 0, 100, 100)
         self.webview2_host = None
         self._webview2_ready = False
         self._webview2_poll_count = 0
@@ -438,38 +436,6 @@ class App(ctk.CTk):
         """임베드 부모(hwnd) 기준 브라우저 영역 상대 좌표."""
         return self._browser_embed_client_rect
 
-    def get_webview_parent_hwnd(self):
-        """WebView2 parent HWND (메인 창)."""
-        if self._webview_parent_hwnd:
-            return int(self._webview_parent_hwnd)
-        try:
-            return int(self.winfo_id())
-        except Exception:
-            return 0
-
-    def get_webview_bounds(self):
-        """WebView2가 메인 창 client 영역에서 차지할 상대 좌표."""
-        return self._webview_bounds
-
-    def _get_window_client_origin(self):
-        """메인 창 client 영역의 screen 좌표 원점 반환."""
-        fallback = (int(self.winfo_rootx()), int(self.winfo_rooty()))
-        if platform.system() != "Windows":
-            return fallback
-        try:
-            import ctypes
-            from ctypes import wintypes
-
-            hwnd = wintypes.HWND(int(self.winfo_id()))
-            user32 = ctypes.windll.user32
-            pt = wintypes.POINT(0, 0)
-            ok = user32.ClientToScreen(hwnd, ctypes.byref(pt))
-            if not ok:
-                return fallback
-            return int(pt.x), int(pt.y)
-        except Exception:
-            return fallback
-
     def _cache_browser_embed_metrics(self, force_update=False):
         if force_update:
             self.update_idletasks()
@@ -490,14 +456,6 @@ class App(ctk.CTk):
         self._browser_embed_client_rect = (
             0,
             0,
-            max(1, host_w),
-            max(1, host_h),
-        )
-        top_client_x, top_client_y = self._get_window_client_origin()
-        self._webview_parent_hwnd = int(self.winfo_id())
-        self._webview_bounds = (
-            max(0, host_root_x - int(top_client_x)),
-            max(0, host_root_y - int(top_client_y)),
             max(1, host_w),
             max(1, host_h),
         )
@@ -523,9 +481,9 @@ class App(ctk.CTk):
         if not self.use_webview2_panel or not self.webview2_host:
             return
         self._cache_browser_embed_metrics(force_update=True)
-        x, y, w, h = self.get_webview_bounds()
+        x, y, w, h = self.get_browser_embed_client_rect()
         started = self.webview2_host.start(
-            self.get_webview_parent_hwnd(),
+            self.get_browser_embed_hwnd(),
             (x, y, w, h),
             "https://nid.naver.com/nidlogin.login",
         )
@@ -563,13 +521,13 @@ class App(ctk.CTk):
         if not self.webview2_host:
             return
         self._cache_browser_embed_metrics()
-        x, y, w, h = self.get_webview_bounds()
+        x, y, w, h = self.get_browser_embed_client_rect()
         self.webview2_host.resize(
             x,
             y,
             w,
             h,
-            parent_hwnd=self.get_webview_parent_hwnd(),
+            parent_hwnd=self.get_browser_embed_hwnd(),
         )
 
     def _settle_webview2_bounds(self):
@@ -690,6 +648,9 @@ class App(ctk.CTk):
             target = self._resolve_focus_target(event.widget)
             if target is None:
                 return
+            if self.use_webview2_panel and self.webview2_host:
+                self.webview2_host.release_focus()
+            self.focus_force()
             self.after_idle(target.focus_set)
         except Exception:
             pass
