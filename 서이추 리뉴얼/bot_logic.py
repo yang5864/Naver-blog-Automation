@@ -43,6 +43,7 @@ class NaverBotLogic:
         self._chrome_process_id = None
         self._runtime_debug_port = None
         self._chrome_user_data_dir = None
+        self._embed_attempt_count = 0
 
         # 성능 설정
         self.page_load_timeout = config.get("page_load_timeout")
@@ -180,12 +181,47 @@ class NaverBotLogic:
             os.makedirs(self._chrome_user_data_dir, exist_ok=True)
         return self._chrome_user_data_dir
 
+    def _is_chrome_widget_window_class(self, class_name):
+        return str(class_name).startswith("Chrome_WidgetWin_")
+
+    def _resolve_chrome_pid_windows(self, debug_port, user_data_dir, fallback_pid=None):
+        if not self._is_windows:
+            return int(fallback_pid or 0)
+
+        # Win32 PID 확인: command line에서 debug port + user-data-dir가 일치하는 chrome.exe 찾기
+        port_arg = f"--remote-debugging-port={int(debug_port)}"
+        profile_arg = f"--user-data-dir={user_data_dir}"
+        profile_arg_ps = profile_arg.replace("'", "''")
+        cmd = (
+            "$p = Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+            f"Where-Object {{ $_.CommandLine -like '*{port_arg}*' -and $_.CommandLine -like '*{profile_arg_ps}*' }} | "
+            "Select-Object -ExpandProperty ProcessId; "
+            "if ($p) { $p | Select-Object -First 1 }"
+        )
+
+        for _ in range(10):
+            try:
+                out = subprocess.check_output(
+                    ["powershell", "-NoProfile", "-Command", cmd],
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                ).strip()
+                if out:
+                    pid = int(str(out).splitlines()[-1].strip())
+                    if pid > 0:
+                        return pid
+            except Exception:
+                pass
+            time.sleep(0.2)
+        return int(fallback_pid or 0)
+
     def _launch_chrome_process(self, debug_port, initial_url=None):
         user_data_dir = self._get_chrome_user_data_dir()
         chrome_path = AppConfig.get_chrome_path()
 
         self._embedded_chrome_hwnd = None
         self._embed_parent_hwnd = None
+        self._embed_attempt_count = 0
 
         if self.gui_window:
             chrome_x, chrome_y, chrome_width, chrome_height = self._get_browser_bounds(self.gui_window)
@@ -199,6 +235,7 @@ class NaverBotLogic:
             f"--user-data-dir={user_data_dir}",
             "--no-first-run",
             "--no-default-browser-check",
+            "--new-window",
             f"--window-size={chrome_width},{chrome_height}",
             f"--window-position={chrome_x},{chrome_y}",
         ]
@@ -207,6 +244,9 @@ class NaverBotLogic:
 
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self._chrome_process_id = proc.pid
+        if self._is_windows and self.embed_browser_windows:
+            self._chrome_process_id = self._resolve_chrome_pid_windows(debug_port, user_data_dir, fallback_pid=proc.pid)
+            self.log(f"   ↪ Chrome PID: {int(self._chrome_process_id)}")
         return True
 
     def connect_driver(self, force_restart=False, initial_url=None):
@@ -275,6 +315,8 @@ class NaverBotLogic:
             if self._is_windows and self.embed_browser_windows:
                 if self._ensure_chrome_embedded(gui_window, chrome_x, chrome_y, chrome_width, chrome_height):
                     return
+                if self._embed_attempt_count <= 3:
+                    self.log("⚠️ 임베드 미적용 상태: 외부 창 모드로 동작")
             self.driver.set_window_position(chrome_x, chrome_y)
             self.driver.set_window_size(chrome_width, chrome_height)
         except WebDriverException as e:
@@ -308,14 +350,21 @@ class NaverBotLogic:
             return False
         try:
             import ctypes
+            from ctypes import wintypes
         except Exception:
             return False
 
+        self._embed_attempt_count += 1
+
         if not hasattr(gui_window, "get_browser_embed_hwnd"):
+            if self._embed_attempt_count <= 3:
+                self.log("⚠️ 임베드 실패: GUI에 임베드 핸들 getter 없음")
             return False
 
         target_hwnd = gui_window.get_browser_embed_hwnd()
         if not target_hwnd:
+            if self._embed_attempt_count <= 3:
+                self.log("⚠️ 임베드 실패: target HWND가 0")
             return False
 
         embed_client_rect = None
@@ -346,6 +395,17 @@ class NaverBotLogic:
         SW_SHOW = 5
         SW_RESTORE = 9
 
+        if not user32.IsWindow(int(target_hwnd)):
+            if self._embed_attempt_count <= 3:
+                self.log(f"⚠️ 임베드 실패: target HWND invalid ({int(target_hwnd)})")
+            return False
+
+        if self._embed_attempt_count <= 3:
+            self.log(
+                f"   ↪ 임베드 시도 #{self._embed_attempt_count}: target={int(target_hwnd)}, "
+                f"rect=({int(chrome_x)},{int(chrome_y)},{int(chrome_width)},{int(chrome_height)})"
+            )
+
         if self._embedded_chrome_hwnd and not user32.IsWindow(self._embedded_chrome_hwnd):
             self._embedded_chrome_hwnd = None
             self._embed_parent_hwnd = None
@@ -354,6 +414,8 @@ class NaverBotLogic:
             hwnd = self._find_chrome_hwnd(user32, chrome_x, chrome_y, chrome_width, chrome_height)
             if not hwnd:
                 self.log("⚠️ 임베드 실패: Chrome 윈도우를 찾을 수 없음")
+                if self._embed_attempt_count <= 3:
+                    self.log(f"   ↪ 후보 Chrome 창 수: {self._count_top_level_chrome_windows(user32)}")
                 self._recover_chrome_window_position(chrome_x, chrome_y, chrome_width, chrome_height)
                 return False
             self.log(f"   ↪ HWND 연결: chrome={int(hwnd)} -> target={int(target_hwnd)}")
@@ -420,6 +482,29 @@ class NaverBotLogic:
         user32.ShowWindow(self._embedded_chrome_hwnd, SW_SHOW)
         return True
 
+    def _count_top_level_chrome_windows(self, user32):
+        try:
+            import ctypes
+            from ctypes import wintypes
+        except Exception:
+            return 0
+
+        count = {"n": 0}
+        EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+        def _callback(hwnd, _lparam):
+            class_name = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(hwnd, class_name, 256)
+            if not self._is_chrome_widget_window_class(class_name.value):
+                return True
+            if user32.GetParent(hwnd) != 0:
+                return True
+            count["n"] += 1
+            return True
+
+        user32.EnumWindows(EnumWindowsProc(_callback), 0)
+        return int(count["n"])
+
     def _find_chrome_hwnd(self, user32, expected_x, expected_y, expected_width, expected_height):
         try:
             import ctypes
@@ -435,14 +520,9 @@ class NaverBotLogic:
         EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
         def _callback(hwnd, _lparam):
-            if not user32.IsWindowVisible(hwnd):
-                return True
-            if user32.GetWindow(hwnd, GW_OWNER) != 0:
-                return True
-
             class_name = ctypes.create_unicode_buffer(256)
             user32.GetClassNameW(hwnd, class_name, 256)
-            if class_name.value != "Chrome_WidgetWin_1":
+            if not self._is_chrome_widget_window_class(class_name.value):
                 return True
 
             # 이미 다른 창에 임베드된 Chrome 창은 제외
@@ -451,8 +531,6 @@ class NaverBotLogic:
 
             pid = wintypes.DWORD()
             user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-            if target_pid and pid.value != target_pid:
-                return True
 
             rc = wintypes.RECT()
             if not user32.GetWindowRect(hwnd, ctypes.byref(rc)):
@@ -460,8 +538,14 @@ class NaverBotLogic:
 
             # 예상 위치와 가까운 창 우선 선택
             score = abs(rc.left - rect[0]) + abs(rc.top - rect[1])
+            if not user32.IsWindowVisible(hwnd):
+                score += 2000
+            if user32.GetWindow(hwnd, GW_OWNER) != 0:
+                score += 1500
             if target_pid and pid.value == target_pid:
                 score -= 10000
+            elif target_pid:
+                score += 4000
             if score < found["score"]:
                 found["score"] = score
                 found["hwnd"] = hwnd
@@ -488,7 +572,7 @@ class NaverBotLogic:
             def _show_callback(hwnd, _lparam):
                 class_name = ctypes.create_unicode_buffer(256)
                 user32.GetClassNameW(hwnd, class_name, 256)
-                if class_name.value != "Chrome_WidgetWin_1" or user32.GetParent(hwnd) != 0:
+                if not self._is_chrome_widget_window_class(class_name.value) or user32.GetParent(hwnd) != 0:
                     return True
                 if target_pid:
                     pid = wintypes.DWORD()

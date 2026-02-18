@@ -40,6 +40,9 @@ if errorlevel 1 (
 
 echo.
 echo [DONE] Build finished: %DIST_OUT%\SeoiChuPro\SeoiChuPro.exe
+if exist dist_latest rmdir /s /q dist_latest
+xcopy "%DIST_OUT%\SeoiChuPro" "dist_latest\SeoiChuPro\" /e /i /y >nul
+echo [DONE] Latest copy: dist_latest\SeoiChuPro\SeoiChuPro.exe
 endlocal
 exit /b 0
 
