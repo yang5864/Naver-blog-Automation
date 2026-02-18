@@ -10,6 +10,11 @@ call .venv\Scripts\activate.bat
 python -m pip install --upgrade pip
 pip install -r requirements.txt pyinstaller
 
+if not exist config.json (
+  echo [INFO] config.json not found. Creating default config.json...
+  echo {}>config.json
+)
+
 pyinstaller ^
   --noconfirm ^
   --clean ^
@@ -17,6 +22,12 @@ pyinstaller ^
   --name "SeoiChuPro" ^
   --add-data "config.json;." ^
   main.py
+
+if errorlevel 1 (
+  echo.
+  echo [ERROR] Build failed. Check log above.
+  exit /b 1
+)
 
 echo.
 echo [DONE] Build finished: dist\SeoiChuPro\SeoiChuPro.exe
