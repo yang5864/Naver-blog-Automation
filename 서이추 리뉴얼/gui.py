@@ -1,6 +1,7 @@
 import time
 import platform
 import threading
+import tkinter as tk
 
 import customtkinter as ctk
 
@@ -282,6 +283,17 @@ class App(ctk.CTk):
         self.browser_placeholder.grid_columnconfigure(0, weight=1)
         self.browser_placeholder.grid_rowconfigure(0, weight=1)
 
+        # WebView2 host는 별도 native tk.Frame HWND를 사용
+        self.browser_native_host = tk.Frame(
+            self.browser_placeholder,
+            bg="#FFFFFF",
+            bd=0,
+            highlightthickness=0,
+            takefocus=0,
+        )
+        self.browser_native_host.place(x=0, y=0, relwidth=1, relheight=1)
+        self.browser_native_host.lower()
+
         self.browser_center_container = ctk.CTkFrame(self.browser_placeholder, fg_color="transparent", corner_radius=0)
         self.browser_center_container.grid(row=0, column=0, sticky="")
 
@@ -422,24 +434,25 @@ class App(ctk.CTk):
     def _cache_browser_embed_metrics(self, force_update=False):
         if force_update:
             self.update_idletasks()
-        placeholder_root_x = int(self.browser_placeholder.winfo_rootx())
-        placeholder_root_y = int(self.browser_placeholder.winfo_rooty())
-        placeholder_w = int(self.browser_placeholder.winfo_width())
-        placeholder_h = int(self.browser_placeholder.winfo_height())
+            self.browser_native_host.update_idletasks()
+        host_root_x = int(self.browser_native_host.winfo_rootx())
+        host_root_y = int(self.browser_native_host.winfo_rooty())
+        host_w = int(self.browser_native_host.winfo_width())
+        host_h = int(self.browser_native_host.winfo_height())
 
         self._browser_embed_rect = (
-            placeholder_root_x,
-            placeholder_root_y,
-            placeholder_w,
-            placeholder_h,
+            host_root_x,
+            host_root_y,
+            host_w,
+            host_h,
         )
-        # 임베드 부모를 placeholder로 고정
-        self._browser_embed_hwnd = int(self.browser_placeholder.winfo_id())
+        # 임베드 부모는 native host HWND
+        self._browser_embed_hwnd = int(self.browser_native_host.winfo_id())
         self._browser_embed_client_rect = (
             0,
             0,
-            max(1, placeholder_w),
-            max(1, placeholder_h),
+            max(1, host_w),
+            max(1, host_h),
         )
 
     def _init_webview2_panel(self):
@@ -484,6 +497,7 @@ class App(ctk.CTk):
         if self.webview2_host.is_ready:
             if not self._webview2_ready:
                 self._webview2_ready = True
+                self.browser_native_host.lift()
                 self.browser_center_container.grid_remove()
                 self.update_browser_status("WebView2 연결됨", "green")
                 self.log_msg("🧩 WebView2 내장 브라우저 모드 활성화")
