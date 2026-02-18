@@ -12,7 +12,7 @@ pip install -r requirements.txt pyinstaller
 
 if not exist config.json (
   echo [INFO] config.json not found. Creating default config.json...
-  echo {}>config.json
+  python -c "import pathlib; pathlib.Path('config.json').write_text('{}\n', encoding='utf-8')"
 )
 
 pyinstaller ^

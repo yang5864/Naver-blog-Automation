@@ -29,12 +29,15 @@ class AppConfig:
 
     def load(self):
         if os.path.exists(self._path):
-            try:
-                with open(self._path, "r", encoding="utf-8") as f:
-                    stored = json.load(f)
-                self._data.update(stored)
-            except (json.JSONDecodeError, OSError):
-                pass
+            # Windows에서 생성된 파일(UTF-16/CP949 등)도 읽을 수 있게 인코딩 순차 시도
+            for enc in ("utf-8", "utf-8-sig", "utf-16", "cp949"):
+                try:
+                    with open(self._path, "r", encoding=enc) as f:
+                        stored = json.load(f)
+                    self._data.update(stored)
+                    break
+                except (UnicodeDecodeError, json.JSONDecodeError, OSError):
+                    continue
 
     def save(self):
         try:
