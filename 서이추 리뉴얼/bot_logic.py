@@ -5,6 +5,9 @@ import os
 import subprocess
 import platform
 import socket
+import json
+import threading
+import urllib.request
 
 
 from selenium import webdriver
@@ -21,6 +24,11 @@ from selenium.common.exceptions import (
 from selenium.webdriver.common.action_chains import ActionChains
 
 from config import AppConfig
+
+try:
+    import websocket
+except Exception:
+    websocket = None
 
 
 class NaverBotLogic:
@@ -44,6 +52,9 @@ class NaverBotLogic:
         self._chrome_user_data_dir = None
         self._embed_attempt_count = 0
         self._webview2_mode = bool(config.get("use_webview2_panel")) and self._is_windows
+        self._cdp_ws = None
+        self._cdp_lock = threading.Lock()
+        self._cdp_msg_id = 0
 
         # 성능 설정
         self.page_load_timeout = config.get("page_load_timeout")
@@ -61,6 +72,550 @@ class NaverBotLogic:
 
     def set_webview2_mode(self, enabled):
         self._webview2_mode = bool(enabled) and self._is_windows
+        if not self._webview2_mode:
+            self._close_cdp()
+
+    def _close_cdp(self):
+        ws = self._cdp_ws
+        self._cdp_ws = None
+        self._cdp_msg_id = 0
+        if ws:
+            try:
+                ws.close()
+            except Exception:
+                pass
+
+    def _get_webview_debug_port(self):
+        if self.gui_window:
+            host = getattr(self.gui_window, "webview2_host", None)
+            if host:
+                try:
+                    p = int(getattr(host, "debug_port", 0) or 0)
+                    if p > 0:
+                        return p
+                except Exception:
+                    pass
+        return self._get_debug_port()
+
+    def _read_json_url(self, url):
+        with urllib.request.urlopen(url, timeout=2.0) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+        return json.loads(raw)
+
+    def _pick_cdp_target(self, debug_port):
+        try:
+            targets = self._read_json_url(f"http://127.0.0.1:{int(debug_port)}/json/list")
+        except Exception:
+            try:
+                targets = self._read_json_url(f"http://127.0.0.1:{int(debug_port)}/json")
+            except Exception:
+                return None
+
+        if not isinstance(targets, list):
+            return None
+
+        page_targets = [t for t in targets if isinstance(t, dict) and t.get("type") == "page"]
+        if not page_targets:
+            return None
+
+        for t in page_targets:
+            url = str(t.get("url") or "")
+            if "naver.com" in url:
+                return t
+        return page_targets[0]
+
+    def _ensure_cdp_connected(self, force_restart=False):
+        if websocket is None:
+            self.log("❌ CDP 연결 실패: websocket-client 미설치")
+            return False
+
+        if self._cdp_ws and not force_restart:
+            try:
+                _ = self._cdp_eval("return location.href;", timeout=2.0)
+                self.driver = self._cdp_ws
+                return True
+            except Exception:
+                self._close_cdp()
+
+        debug_port = self._get_webview_debug_port()
+        if debug_port <= 0:
+            self.log("❌ CDP 연결 실패: debug port 없음")
+            return False
+
+        for _ in range(60):
+            if self._is_debug_port_open(debug_port):
+                break
+            time.sleep(0.2)
+
+        if not self._is_debug_port_open(debug_port):
+            self.log(f"❌ CDP 연결 실패: 포트 미오픈 ({debug_port})")
+            return False
+
+        target = self._pick_cdp_target(debug_port)
+        if not target:
+            self.log(f"❌ CDP 연결 실패: page target 없음 ({debug_port})")
+            return False
+
+        ws_url = target.get("webSocketDebuggerUrl")
+        if not ws_url:
+            self.log("❌ CDP 연결 실패: webSocketDebuggerUrl 없음")
+            return False
+
+        try:
+            self._cdp_ws = websocket.create_connection(ws_url, timeout=8.0, enable_multithread=True)
+            self._cdp_msg_id = 0
+            try:
+                self._cdp_cmd("Runtime.enable", timeout=2.0)
+            except Exception:
+                pass
+            try:
+                self._cdp_cmd("Page.enable", timeout=2.0)
+            except Exception:
+                pass
+            try:
+                self._cdp_cmd("Network.enable", timeout=2.0)
+            except Exception:
+                pass
+            self.driver = self._cdp_ws
+            self.log(f"✅ WebView2 CDP 연결 성공: {debug_port}")
+            return True
+        except Exception as e:
+            self._close_cdp()
+            self.log(f"❌ CDP 소켓 연결 실패: {str(e)[:60]}")
+            return False
+
+    def _cdp_cmd(self, method, params=None, timeout=8.0):
+        if not self._cdp_ws:
+            raise RuntimeError("CDP 미연결")
+        with self._cdp_lock:
+            self._cdp_msg_id += 1
+            req_id = self._cdp_msg_id
+            payload = {
+                "id": req_id,
+                "method": str(method),
+                "params": params or {},
+            }
+            self._cdp_ws.settimeout(timeout)
+            self._cdp_ws.send(json.dumps(payload, ensure_ascii=False))
+            while True:
+                raw = self._cdp_ws.recv()
+                data = json.loads(raw)
+                if not isinstance(data, dict):
+                    continue
+                if data.get("id") != req_id:
+                    continue
+                if "error" in data:
+                    err = data.get("error") or {}
+                    raise RuntimeError(err.get("message") or str(err))
+                return data.get("result") or {}
+
+    def _cdp_eval(self, script, timeout=8.0):
+        expr = f"(() => {{ {script} }})()"
+        result = self._cdp_cmd(
+            "Runtime.evaluate",
+            {
+                "expression": expr,
+                "returnByValue": True,
+                "awaitPromise": True,
+            },
+            timeout=timeout,
+        )
+        if result.get("exceptionDetails"):
+            detail = result["exceptionDetails"]
+            text = ""
+            if isinstance(detail, dict):
+                text = str(detail.get("text") or detail.get("exception", {}).get("description") or "")
+            raise RuntimeError(text or "Runtime.evaluate 실패")
+        value = (result.get("result") or {}).get("value")
+        return value
+
+    def _cdp_navigate(self, url):
+        self._cdp_cmd("Page.navigate", {"url": str(url)}, timeout=10.0)
+        deadline = time.time() + 15.0
+        while time.time() < deadline:
+            try:
+                state = self._cdp_eval("return document.readyState;", timeout=3.0)
+                if state in ("interactive", "complete"):
+                    return True
+            except Exception:
+                pass
+            time.sleep(0.2)
+        return False
+
+    def _find_text_in_body(self, keyword):
+        try:
+            body_text = self._cdp_eval("return (document.body && document.body.innerText) ? document.body.innerText : '';", timeout=4.0) or ""
+            return str(keyword) in str(body_text)
+        except Exception:
+            return False
+
+    def _get_current_url(self):
+        if self._webview2_mode:
+            try:
+                return str(self._cdp_eval("return location.href || '';", timeout=3.0) or "")
+            except Exception:
+                return ""
+        try:
+            return str(self.driver.current_url or "")
+        except Exception:
+            return ""
+
+    def _get_page_source(self):
+        if self._webview2_mode:
+            try:
+                return str(
+                    self._cdp_eval(
+                        "return document.documentElement ? document.documentElement.outerHTML : '';",
+                        timeout=5.0,
+                    )
+                    or ""
+                )
+            except Exception:
+                return ""
+        try:
+            return str(self.driver.page_source or "")
+        except Exception:
+            return ""
+
+    def _append_blog_ids_from_links(self, links, processed_ids, queue, blacklist):
+        new_count = 0
+        if not isinstance(links, list):
+            return new_count
+        for href in links:
+            try:
+                href = str(href or "")
+                if not href or "blog.naver.com" not in href:
+                    continue
+                match = re.search(r"blog\.naver\.com\/([a-zA-Z0-9_-]+)", href)
+                if not match:
+                    continue
+                bid = match.group(1)
+                bid_lower = bid.lower()
+                if bid_lower in blacklist:
+                    continue
+                if bid in processed_ids or len(bid) <= 3:
+                    continue
+                if bid in queue or bid.isdigit():
+                    continue
+                queue.append(bid)
+                processed_ids.add(bid)
+                new_count += 1
+            except Exception:
+                continue
+        return new_count
+
+    def _get_layer_popup_text_webview2(self):
+        try:
+            return self._cdp_eval(
+                """
+                var layer = document.getElementById('_alertLayer');
+                if (layer && layer.style.display !== 'none') {
+                    var dsc = layer.querySelector('.dsc');
+                    return dsc ? (dsc.innerText || '').trim() : null;
+                }
+                return null;
+                """,
+                timeout=3.0,
+            )
+        except Exception:
+            return None
+
+    def _close_layer_popup_webview2(self):
+        try:
+            self._cdp_eval(
+                """
+                var btn = document.getElementById('_alertLayerClose');
+                if (btn) { btn.click(); return true; }
+                return false;
+                """,
+                timeout=2.0,
+            )
+        except Exception:
+            pass
+
+    def _process_neighbor_webview2(self, blog_id):
+        try:
+            src = self._get_page_source()
+            if "이웃끊기" in src or "서로이웃 취소" in src:
+                return False, "스킵(이미 이웃)"
+
+            clicked = self._cdp_eval(
+                """
+                try {
+                    var addBtn = document.querySelector("[data-click-area='ebc.add']");
+                    if (addBtn) { addBtn.click(); return 'CLICKED'; }
+                    if (document.querySelector("[data-click-area='ebc.ngr']")) return 'ALREADY';
+                    var nodes = Array.from(document.querySelectorAll("a,button,span,div"));
+                    var textBtn = nodes.find(function(el){
+                        var txt = (el.innerText || el.textContent || '').trim();
+                        return txt.indexOf('이웃추가') >= 0;
+                    });
+                    if (textBtn) { textBtn.click(); return 'CLICKED'; }
+                    return 'NONE';
+                } catch (e) {
+                    return 'ERROR:' + (e && e.message ? e.message : '');
+                }
+                """,
+                timeout=4.0,
+            )
+            if clicked == "ALREADY":
+                return False, "스킵(이미 이웃)"
+            if isinstance(clicked, str) and clicked.startswith("ERROR:"):
+                return False, f"실패({clicked[:20]})"
+            if clicked != "CLICKED":
+                return False, "스킵(버튼 없음)"
+
+            self.safe_sleep(0.35)
+
+            src_after = self._get_page_source()
+            if "하루에 신청 가능한 이웃수" in src_after and "초과" in src_after:
+                try:
+                    self._cdp_eval(
+                        """
+                        var closeBtn = Array.from(document.querySelectorAll("button,a"))
+                            .find(function(el){ return (el.innerText || '').indexOf('닫기') >= 0; });
+                        if (closeBtn) closeBtn.click();
+                        return true;
+                        """,
+                        timeout=2.0,
+                    )
+                except Exception:
+                    pass
+                return "DONE_DAY_LIMIT", "🎉 일일 한도 달성!"
+
+            if "서로이웃 신청 진행중입니다" in src_after:
+                try:
+                    self._cdp_eval(
+                        """
+                        var cancelBtn = Array.from(document.querySelectorAll("button,a"))
+                            .find(function(el){ return (el.innerText || '').indexOf('취소') >= 0; });
+                        if (cancelBtn) cancelBtn.click();
+                        return true;
+                        """,
+                        timeout=2.0,
+                    )
+                except Exception:
+                    pass
+                return False, "스킵(이미 신청중)"
+
+            layer_popup = self._get_layer_popup_text_webview2()
+            if layer_popup:
+                if "하루" in layer_popup and "초과" in layer_popup:
+                    return "DONE_DAY_LIMIT", "🎉 일일 한도 달성!"
+                if "선택 그룹" in layer_popup:
+                    return "STOP_GROUP_FULL", layer_popup
+                self._close_layer_popup_webview2()
+                if "5,000" in layer_popup or "5000" in layer_popup:
+                    return False, "스킵(상대 5000명)"
+                return False, f"스킵({layer_popup[:20]})"
+
+            current_url = self._get_current_url()
+            if "BuddyAddForm" not in current_url:
+                if not self.safe_get(self.driver, f"https://m.blog.naver.com/BuddyAddForm.naver?blogId={blog_id}"):
+                    return False, "실패(양식 페이지 로드 실패)"
+                self.safe_sleep(1.0)
+
+            page_src = self._get_page_source()
+            if "로그인" in page_src and "로그인이 필요" in page_src:
+                return False, "실패(로그인 필요)"
+
+            form_state = self._cdp_eval(
+                """
+                try {
+                    var both = document.getElementById('bothBuddyRadio');
+                    if (!both) {
+                        if (document.getElementById('onewayBuddyRadio')) return 'ONEWAY_ONLY';
+                        return 'NO_FORM';
+                    }
+                    if (both.disabled || both.getAttribute('disabled')) return 'DISABLED';
+                    if (!both.checked) {
+                        var label = document.querySelector("label[for='bothBuddyRadio']");
+                        if (label) label.click();
+                        else both.click();
+                    }
+                    return 'OK';
+                } catch (e) {
+                    return 'ERROR:' + (e && e.message ? e.message : '');
+                }
+                """,
+                timeout=4.0,
+            )
+            if form_state == "ONEWAY_ONLY":
+                return False, "스킵(서이추 비활성화)"
+            if form_state == "NO_FORM":
+                if "진행 중" in page_src or "신청중" in page_src:
+                    return False, "스킵(이미 신청중)"
+                return False, "실패(양식 없음)"
+            if form_state == "DISABLED":
+                return False, "스킵(서이추 불가)"
+            if isinstance(form_state, str) and form_state.startswith("ERROR:"):
+                return False, f"실패({form_state[:20]})"
+
+            msg_json = json.dumps(self.neighbor_msg or "")
+            self._cdp_eval(
+                f"""
+                var el = document.querySelector("textarea");
+                if (!el) return false;
+                el.focus();
+                el.value = {msg_json};
+                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                return true;
+                """,
+                timeout=4.0,
+            )
+
+            clicked_confirm = self._cdp_eval(
+                """
+                var btn = Array.from(document.querySelectorAll("button,a,input[type='button'],input[type='submit']"))
+                    .find(function(el){
+                        var txt = (el.innerText || el.value || '').trim();
+                        return txt === '확인' || txt.indexOf('확인') >= 0;
+                    });
+                if (!btn) return false;
+                btn.click();
+                return true;
+                """,
+                timeout=4.0,
+            )
+            if not clicked_confirm:
+                return False, "실패(확인 버튼 없음)"
+
+            self.safe_sleep(self.fast_wait)
+
+            final_popup = self._get_layer_popup_text_webview2()
+            if final_popup:
+                if "하루" in final_popup and "초과" in final_popup:
+                    return "DONE_DAY_LIMIT", "🎉 일일 한도 달성!"
+                if "선택 그룹" in final_popup:
+                    return "STOP_GROUP_FULL", final_popup
+                self._close_layer_popup_webview2()
+                if "5,000" in final_popup or "5000" in final_popup:
+                    return False, "스킵(상대 5000명)"
+                if "신청" in final_popup or "완료" in final_popup:
+                    return True, "신청 완료"
+                return False, f"실패({final_popup[:20]})"
+
+            return True, "신청 완료"
+        except Exception as e:
+            return False, f"에러: {str(e)[:15]}"
+
+    def _process_like_webview2(self):
+        try:
+            result = self._cdp_eval(
+                """
+                try {
+                    var wrapper = document.querySelector("a.u_likeit_button");
+                    if (!wrapper) return "NO_BUTTON";
+                    var isPressed = wrapper.getAttribute("aria-pressed") === "true";
+                    var cls = (wrapper.getAttribute("class") || "").split(/\\s+/);
+                    if (isPressed || cls.indexOf("on") >= 0) return "ALREADY";
+                    var icon = wrapper.querySelector("span.u_likeit_icon");
+                    (icon || wrapper).click();
+                    return "CLICKED";
+                } catch (e) {
+                    return "ERROR";
+                }
+                """,
+                timeout=4.0,
+            )
+            if result == "NO_BUTTON":
+                return "공감 버튼 없음"
+            if result == "ALREADY":
+                return "이미 공감함"
+            if result != "CLICKED":
+                return "공감 실패"
+
+            self.safe_sleep(self.normal_wait)
+            now_pressed = bool(
+                self._cdp_eval(
+                    """
+                    var wrapper = document.querySelector("a.u_likeit_button");
+                    if (!wrapper) return false;
+                    var isPressed = wrapper.getAttribute("aria-pressed") === "true";
+                    var cls = (wrapper.getAttribute("class") || "").split(/\\s+/);
+                    if (isPressed || cls.indexOf("on") >= 0) return true;
+                    wrapper.click();
+                    return true;
+                    """,
+                    timeout=3.0,
+                )
+            )
+            if now_pressed:
+                return "공감 ❤️"
+            return "공감 실패"
+        except Exception:
+            return "공감 실패"
+
+    def _process_comment_webview2(self, blog_id):
+        try:
+            opened = self._cdp_eval(
+                """
+                var btn = document.querySelector("button[class*='comment_btn'], a.btn_comment");
+                if (!btn) return false;
+                btn.click();
+                return true;
+                """,
+                timeout=4.0,
+            )
+            if not opened:
+                return "댓글 버튼 없음"
+
+            self.safe_sleep(self.normal_wait)
+
+            target_nickname = str(
+                self._cdp_eval(
+                    """
+                    var nameEl = document.querySelector(".user_name, .blogger_name");
+                    if (!nameEl) return "";
+                    return (nameEl.innerText || nameEl.textContent || "").trim();
+                    """,
+                    timeout=3.0,
+                )
+                or ""
+            )
+            if not target_nickname:
+                target_nickname = blog_id
+
+            final_msg = self.comment_msg.format(name=target_nickname)
+            msg_json = json.dumps(final_msg)
+
+            typed = self._cdp_eval(
+                f"""
+                var box = document.querySelector(".u_cbox_text_mention, .u_cbox_inbox textarea");
+                if (!box) return false;
+                box.focus();
+                box.value = {msg_json};
+                box.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                box.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                return true;
+                """,
+                timeout=4.0,
+            )
+            if not typed:
+                return "입력창 없음"
+
+            self.safe_sleep(0.2)
+            submitted = self._cdp_eval(
+                """
+                var btn = document.querySelector(".u_cbox_btn_upload, .u_cbox_btn_complete");
+                if (!btn) return false;
+                btn.click();
+                return true;
+                """,
+                timeout=4.0,
+            )
+            if not submitted:
+                return "등록 버튼 없음"
+
+            self.safe_sleep(self.normal_wait)
+            layer_text = self._get_layer_popup_text_webview2()
+            if layer_text and ("차단" in layer_text or "스팸" in layer_text):
+                self._close_layer_popup_webview2()
+                return "실패(스팸 차단)"
+            return "댓글 💬"
+        except Exception:
+            return "댓글 실패"
 
     def _close_tab_and_return(self, main_window):
         """현재 탭 닫고 메인 윈도우로 복귀."""
@@ -74,6 +629,11 @@ class NaverBotLogic:
     def _navigate_to_blog_search(self, keyword):
         """네이버 블로그 검색 페이지로 이동."""
         search_url = f"https://search.naver.com/search.naver?where=blog&query={keyword}"
+        if self._webview2_mode:
+            if not self._cdp_navigate(search_url):
+                return False
+            self.safe_sleep(1.0)
+            return True
         if not self.safe_get(self.driver, search_url):
             return False
         self.safe_sleep(1.0)
@@ -81,6 +641,27 @@ class NaverBotLogic:
 
     def _click_blog_tab(self):
         """검색 결과에서 '블로그' 탭 클릭."""
+        if self._webview2_mode:
+            try:
+                clicked = self._cdp_eval(
+                    """
+                    var tabs = Array.from(document.querySelectorAll("[role='tab'], .tab, .lnb_item a, a, button"));
+                    var blogTab = tabs.find(function(el){
+                        var txt = (el.innerText || el.textContent || '').trim();
+                        return txt.indexOf('블로그') >= 0;
+                    });
+                    if (!blogTab) return false;
+                    blogTab.click();
+                    return true;
+                    """,
+                    timeout=4.0,
+                )
+                if clicked:
+                    self.log("   ↪ '블로그' 탭 클릭...")
+                    self.safe_sleep(1.0)
+            except Exception:
+                pass
+            return
         try:
             blog_tab = None
             tabs = self.driver.find_elements(By.CSS_SELECTOR, "[role='tab'], .tab, .lnb_item a")
@@ -106,6 +687,16 @@ class NaverBotLogic:
     # Selenium 유틸
     # ------------------------------------------------------------------
     def safe_get(self, driver, url, max_retries=2):
+        if self._webview2_mode:
+            for attempt in range(max_retries):
+                try:
+                    if self._cdp_navigate(url):
+                        return True
+                except Exception:
+                    pass
+                if attempt < max_retries - 1:
+                    self.safe_sleep(0.5)
+            return False
         for attempt in range(max_retries):
             try:
                 driver.get(url)
@@ -198,6 +789,23 @@ class NaverBotLogic:
 
     def connect_driver(self, force_restart=False, initial_url=None):
         """크롬 연결 (GUI 오른쪽 패널 위치에 배치)"""
+        if self._webview2_mode:
+            port = self._get_webview_debug_port()
+            self.log(f"🌐 WebView2 자동화 연결 시도: {port}")
+            try:
+                ok = self._ensure_cdp_connected(force_restart=force_restart)
+                if ok:
+                    self.update_status("브라우저 연결됨", "green")
+                    return True
+                self.driver = None
+                self.update_status("브라우저 연결 실패", "red")
+                return False
+            except Exception as e:
+                self.log(f"❌ WebView2 연결 실패: {str(e)[:60]}")
+                self.driver = None
+                self.update_status("브라우저 연결 실패", "red")
+                return False
+
         debug_port = self._get_debug_port()
 
         if self.driver and not force_restart:
@@ -212,8 +820,7 @@ class NaverBotLogic:
 
         self.log("🖥️ 크롬 브라우저 실행 중...")
         try:
-            # WebView2 모드에서는 WebView2가 브라우저를 이미 띄우므로 Chrome 프로세스 실행 불필요
-            if not self._is_debug_port_open(debug_port) and not self._webview2_mode:
+            if not self._is_debug_port_open(debug_port):
                 self._launch_chrome_process(debug_port, initial_url=initial_url)
 
             # 디버그 포트가 실제로 열릴 때까지 대기 (최대 15초)
@@ -226,17 +833,6 @@ class NaverBotLogic:
             self.driver = None
             for _ in range(20):
                 try:
-                    if self._webview2_mode:
-                        from selenium.webdriver.edge.options import Options as EdgeOptions
-                        from selenium.webdriver import Edge
-
-                        edge_opts = EdgeOptions()
-                        edge_opts.add_experimental_option("debuggerAddress", f"127.0.0.1:{debug_port}")
-                        edge_opts.add_experimental_option("excludeSwitches", ["enable-automation"])
-                        edge_opts.page_load_strategy = "eager"
-                        self.driver = Edge(options=edge_opts)
-                        break
-
                     chrome_options = Options()
                     chrome_options.add_experimental_option("debuggerAddress", f"127.0.0.1:{debug_port}")
                     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
@@ -547,6 +1143,30 @@ class NaverBotLogic:
     def check_login_status(self):
         if not self.driver:
             return False
+        if self._webview2_mode:
+            try:
+                current_url = self._get_current_url().lower()
+                if "nid.naver.com/nidlogin" in current_url:
+                    return False
+                try:
+                    self._cdp_cmd("Network.enable", timeout=2.0)
+                except Exception:
+                    pass
+                cookie_data = self._cdp_cmd(
+                    "Network.getCookies",
+                    {"urls": ["https://nid.naver.com", "https://m.blog.naver.com", "https://blog.naver.com"]},
+                    timeout=4.0,
+                )
+                cookies = cookie_data.get("cookies") or []
+                for cookie in cookies:
+                    name = str((cookie or {}).get("name") or "")
+                    if name in ("NID_AUT", "NID_SES"):
+                        return True
+                if self._find_text_in_body("로그아웃"):
+                    return True
+                return False
+            except Exception:
+                return False
         try:
             current_url = (self.driver.current_url or "").lower()
             if "nid.naver.com/nidlogin" in current_url:
@@ -561,6 +1181,16 @@ class NaverBotLogic:
 
     def open_login_page(self):
         login_url = "https://nid.naver.com/nidlogin.login"
+        if self._webview2_mode:
+            if not self.connect_driver(initial_url=login_url):
+                return False
+            self.log("🌐 네이버 로그인 페이지 열기...")
+            if self.safe_get(self.driver, login_url):
+                self.update_status("로그인 페이지", "blue")
+                return True
+            self.update_status("브라우저 오류", "red")
+            return False
+
         debug_port = self._get_debug_port()
 
         # 먼저 로그인 URL로 크롬 프로세스를 띄워 UI 노출 속도를 우선 확보
@@ -595,7 +1225,7 @@ class NaverBotLogic:
                 return
             self._click_blog_tab()
             self.update_status(f"검색: {keyword}", "blue")
-        except WebDriverException:
+        except (WebDriverException, RuntimeError):
             self.log("❌ 이동 실패. 브라우저 재연결 필요.")
             self.driver = None
 
@@ -605,6 +1235,53 @@ class NaverBotLogic:
     def collect_blog_ids(self, processed_ids):
         queue = []
         blacklist = {"myblog", "postlist", "buddyaddform", "likeit", "nvisitor", "blog", "domainid", "admin", "search"}
+
+        if self._webview2_mode:
+            scroll_attempts = 0
+            max_scroll = 7
+            while len(queue) < 20 and scroll_attempts < max_scroll:
+                try:
+                    self._cdp_eval("window.scrollTo(0, document.body.scrollHeight); return true;", timeout=4.0)
+                except Exception:
+                    pass
+                self.safe_sleep(1.0)
+
+                new_count = 0
+                try:
+                    links = self._cdp_eval(
+                        "return Array.from(document.querySelectorAll('a[href]')).map(function(a){ return a.href || ''; });",
+                        timeout=6.0,
+                    )
+                    new_count += self._append_blog_ids_from_links(links, processed_ids, queue, blacklist)
+                except Exception:
+                    pass
+
+                self.log(f"   ⬇️ 스크롤 {scroll_attempts+1}/{max_scroll} - 신규 {new_count}명 (대기열: {len(queue)}명)")
+
+                if len(queue) >= 20:
+                    break
+
+                scroll_attempts += 1
+
+                if new_count == 0:
+                    try:
+                        clicked_more = self._cdp_eval(
+                            """
+                            var btn = document.querySelector('.btn_more, .more_btn');
+                            if (!btn) return false;
+                            var style = window.getComputedStyle(btn);
+                            if (style && style.display === 'none') return false;
+                            btn.click();
+                            return true;
+                            """,
+                            timeout=3.0,
+                        )
+                        if clicked_more:
+                            self.safe_sleep(0.8)
+                    except Exception:
+                        pass
+
+            return queue
 
         scroll_attempts = 0
         max_scroll = 7
@@ -620,26 +1297,7 @@ class NaverBotLogic:
                 for link in all_links:
                     try:
                         href = link.get_attribute("href")
-                        if not href or "blog.naver.com" not in href:
-                            continue
-
-                        match = re.search(r"blog\.naver\.com\/([a-zA-Z0-9_-]+)", href)
-                        if not match:
-                            continue
-
-                        bid = match.group(1)
-                        bid_lower = bid.lower()
-
-                        if bid_lower in blacklist:
-                            continue
-                        if bid in processed_ids or len(bid) <= 3:
-                            continue
-                        if bid in queue or bid.isdigit():
-                            continue
-
-                        queue.append(bid)
-                        processed_ids.add(bid)
-                        new_count += 1
+                        new_count += self._append_blog_ids_from_links([href], processed_ids, queue, blacklist)
                     except (StaleElementReferenceException, NoSuchElementException):
                         continue
             except WebDriverException:
@@ -667,6 +1325,9 @@ class NaverBotLogic:
     # 서이추 신청
     # ------------------------------------------------------------------
     def process_neighbor(self, blog_id):
+        if self._webview2_mode:
+            return self._process_neighbor_webview2(blog_id)
+
         driver = self.driver
         try:
             src = driver.page_source
@@ -841,6 +1502,8 @@ class NaverBotLogic:
     # 공감 / 댓글
     # ------------------------------------------------------------------
     def process_like(self, driver):
+        if self._webview2_mode:
+            return self._process_like_webview2()
         try:
             wrapper = self.safe_find_element(driver, By.CSS_SELECTOR, "a.u_likeit_button", timeout=3)
             if not wrapper:
@@ -869,6 +1532,8 @@ class NaverBotLogic:
             return "공감 실패"
 
     def process_comment(self, driver, blog_id):
+        if self._webview2_mode:
+            return self._process_comment_webview2(blog_id)
         try:
             comment_btn = self.safe_find_element(
                 driver, By.CSS_SELECTOR, "button[class*='comment_btn'], a.btn_comment", timeout=3
@@ -973,8 +1638,8 @@ class NaverBotLogic:
             self.safe_sleep(1.2)
             consecutive_errors = 0
 
-            current_url = self.driver.current_url
-            page_source = self.driver.page_source
+            current_url = self._get_current_url()
+            page_source = self._get_page_source()
             if "MobileErrorView" in current_url or "일시적인 오류" in page_source:
                 self.log("   ❌ 접근 불가 블로그 (Skip)")
                 continue
@@ -990,7 +1655,7 @@ class NaverBotLogic:
 
             self.log(f"   └ 서이추: {msg_friend}")
 
-            if "BuddyAddForm" in self.driver.current_url:
+            if "BuddyAddForm" in self._get_current_url():
                 self.safe_get(self.driver, f"https://m.blog.naver.com/{blog_id}")
                 self.safe_sleep(self.normal_wait)
 

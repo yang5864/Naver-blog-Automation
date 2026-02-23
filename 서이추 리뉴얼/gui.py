@@ -522,7 +522,7 @@ class App(ctk.CTk):
                 self.log_msg("🧩 WebView2 내장 브라우저 모드 활성화")
                 self._webview2_settle_remaining = 12
                 self.after(80, self._settle_webview2_bounds)
-                self.after(1500, self._connect_selenium_to_webview2)
+                self.after(1500, self._connect_engine_to_webview2)
             self._schedule_webview2_resize()
             return
         if self._webview2_poll_count < 120:
@@ -556,7 +556,7 @@ class App(ctk.CTk):
         if self._webview2_settle_remaining > 0:
             self.after(120, self._settle_webview2_bounds)
 
-    def _connect_selenium_to_webview2(self):
+    def _connect_engine_to_webview2(self):
         if not self.use_webview2_panel:
             return
         if self._engine_connecting:
@@ -566,9 +566,9 @@ class App(ctk.CTk):
         self._engine_connecting = True
         self.btn_start.configure(state="disabled", text="엔진 연결 중...")
         self.log_msg("🔗 자동화 엔진 연결 중...")
-        threading.Thread(target=self._thread_connect_selenium, daemon=True).start()
+        threading.Thread(target=self._thread_connect_engine, daemon=True).start()
 
-    def _thread_connect_selenium(self):
+    def _thread_connect_engine(self):
         ok = self.logic.connect_driver()
         self.after(0, self._on_engine_connect_done, ok)
 
@@ -817,7 +817,7 @@ class App(ctk.CTk):
                 self.log_msg("⚠️ 자동화 엔진 연결 대기 중입니다. 잠시 후 다시 시도하세요.")
                 return
             self.log_msg("⚠️ 자동화 엔진 미연결 상태입니다. 지금 연결을 다시 시도합니다.")
-            self._connect_selenium_to_webview2()
+            self._connect_engine_to_webview2()
             return
         if self.logic.is_running:
             self.log_msg("⚠️ 이미 실행 중입니다.")
