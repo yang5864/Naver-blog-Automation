@@ -1,3 +1,4 @@
+import os
 import time
 import platform
 import threading
@@ -482,10 +483,14 @@ class App(ctk.CTk):
             return
         self._cache_browser_embed_metrics(force_update=True)
         x, y, w, h = self.get_browser_embed_client_rect()
+        debug_port = self.config.get("chrome_debug_port") or 9222
+        user_data_folder = os.path.expanduser("~/WebView2BotData")
         started = self.webview2_host.start(
             self.get_browser_embed_hwnd(),
             (x, y, w, h),
             "https://nid.naver.com/nidlogin.login",
+            debug_port=debug_port,
+            user_data_folder=user_data_folder,
         )
         if not started:
             self.log_msg(f"⚠️ WebView2 시작 실패: {self.webview2_host.last_error}")
@@ -508,6 +513,7 @@ class App(ctk.CTk):
                 self.log_msg("🧩 WebView2 내장 브라우저 모드 활성화")
                 self._webview2_settle_remaining = 12
                 self.after(80, self._settle_webview2_bounds)
+                self.after(1500, self._connect_selenium_to_webview2)
             self._schedule_webview2_resize()
             return
         if self._webview2_poll_count < 120:
@@ -538,6 +544,20 @@ class App(ctk.CTk):
         self._webview2_settle_remaining -= 1
         if self._webview2_settle_remaining > 0:
             self.after(120, self._settle_webview2_bounds)
+
+    def _connect_selenium_to_webview2(self):
+        self.log_msg("🔗 자동화 엔진 연결 중...")
+        threading.Thread(target=self._thread_connect_selenium, daemon=True).start()
+
+    def _thread_connect_selenium(self):
+        ok = self.logic.connect_driver()
+        if ok:
+            self.after(0, lambda: (
+                self.btn_start.configure(state="normal", text="작업 시작"),
+                self.log_msg("✅ 자동화 엔진 연결 완료. 로그인 후 작업을 시작하세요.")
+            ))
+        else:
+            self.after(0, lambda: self.log_msg("⚠️ 자동화 엔진 연결 실패. 재시도하거나 Chrome 모드를 사용하세요."))
 
     def _on_close(self):
         try:
@@ -770,8 +790,8 @@ class App(ctk.CTk):
         self.after(0, lambda: self.btn_search.configure(state="normal", text="이동"))
 
     def on_start(self):
-        if self.use_webview2_panel:
-            self.log_msg("⚠️ WebView2 패널 1차 적용 상태입니다. 자동화 엔진 이관 전이라 '작업 시작'은 Chrome 모드에서만 지원합니다.")
+        if self.use_webview2_panel and not self.logic.driver:
+            self.log_msg("⚠️ 자동화 엔진 연결 대기 중입니다. 잠시 후 다시 시도하세요.")
             return
         if self.logic.is_running:
             self.log_msg("⚠️ 이미 실행 중입니다.")
@@ -811,12 +831,11 @@ class App(ctk.CTk):
         self.after(0, self._update_button_state)
 
     def _update_button_state(self):
-        if self.use_webview2_panel:
-            self.btn_start.configure(state="normal", text="작업 시작 (준비중)")
-            self.btn_stop.configure(state="disabled")
-            return
         if not self.logic.is_running:
-            self.btn_start.configure(state="normal", text="작업 시작")
+            if self.use_webview2_panel and not self.logic.driver:
+                self.btn_start.configure(state="normal", text="작업 시작 (준비중)")
+            else:
+                self.btn_start.configure(state="normal", text="작업 시작")
             self.btn_stop.configure(state="disabled")
         else:
             self.btn_start.configure(state="disabled", text="작업 중...")

@@ -67,6 +67,11 @@ class WebView2PanelHost:
 
         self._last_error = ""
 
+        self._debug_port = 0
+        self._user_data_folder = ""
+        self._env_options_obj = None
+        self._env_options_ptr = None
+
     @property
     def is_ready(self):
         return bool(self._ready)
@@ -135,7 +140,8 @@ class WebView2PanelHost:
         self._coinit_done = True
         return True
 
-    def start(self, parent_hwnd, bounds, initial_url="about:blank"):
+    def start(self, parent_hwnd, bounds, initial_url="about:blank",
+              debug_port=None, user_data_folder=None):
         """WebView2 생성 시작(비동기)."""
         if not self._available:
             self._set_error(f"사용 불가: {self._available_reason}")
@@ -172,7 +178,7 @@ class WebView2PanelHost:
                 create_env.argtypes = [
                     ctypes.c_wchar_p,
                     ctypes.c_wchar_p,
-                    ctypes.c_void_p,
+                    POINTER(ICoreWebView2EnvironmentOptions),
                     POINTER(ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler),
                 ]
                 create_env.restype = HRESULT
@@ -182,11 +188,18 @@ class WebView2PanelHost:
                 return False
 
         try:
+            self._debug_port = int(debug_port or 9222)
+            self._user_data_folder = str(user_data_folder or os.path.expanduser("~/WebView2BotData"))
+            os.makedirs(self._user_data_folder, exist_ok=True)
+
+            self._env_options_obj = _EnvironmentOptions(f"--remote-debugging-port={self._debug_port}")
+            self._env_options_ptr = self._env_options_obj.QueryInterface(ICoreWebView2EnvironmentOptions)
+
             self._env_handler_obj = _EnvironmentCompletedHandler(self)
             self._env_handler_ptr = self._env_handler_obj.QueryInterface(
                 ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler
             )
-            hr = self._create_env_func(None, None, None, self._env_handler_ptr)
+            hr = self._create_env_func(None, self._user_data_folder, self._env_options_ptr, self._env_handler_ptr)
         except Exception as exc:
             self._set_error(f"환경 생성 요청 실패: {exc}")
             return False
@@ -325,6 +338,42 @@ class WebView2PanelHost:
 
 
 if IS_WINDOWS and COMTYPES_AVAILABLE:
+    class ICoreWebView2EnvironmentOptions(IUnknown):
+        _iid_ = GUID("{2FDE08A8-1E9A-4766-8C05-95A9CEB9D1C5}")
+
+    ICoreWebView2EnvironmentOptions._methods_ = [
+        COMMETHOD([], HRESULT, "get_AdditionalBrowserArguments",
+                  (["out"], POINTER(ctypes.c_wchar_p), "value")),
+        COMMETHOD([], HRESULT, "put_AdditionalBrowserArguments",
+                  (["in"], ctypes.c_wchar_p, "value")),
+        COMMETHOD([], HRESULT, "get_AllowSingleSignOnUsingOSPrimaryAccount",
+                  (["out"], POINTER(ctypes.c_int), "allow")),
+        COMMETHOD([], HRESULT, "put_AllowSingleSignOnUsingOSPrimaryAccount",
+                  (["in"], ctypes.c_int, "allow")),
+    ]
+
+    class _EnvironmentOptions(COMObject):
+        _com_interfaces_ = [ICoreWebView2EnvironmentOptions]
+
+        def __init__(self, additional_args=""):
+            super().__init__()
+            self._additional_args = additional_args
+
+        def get_AdditionalBrowserArguments(self, value):
+            value[0] = ctypes.c_wchar_p(self._additional_args)
+            return 0
+
+        def put_AdditionalBrowserArguments(self, value):
+            self._additional_args = str(value or "")
+            return 0
+
+        def get_AllowSingleSignOnUsingOSPrimaryAccount(self, allow):
+            allow[0] = 0
+            return 0
+
+        def put_AllowSingleSignOnUsingOSPrimaryAccount(self, allow):
+            return 0
+
     class EventRegistrationToken(ctypes.Structure):
         _fields_ = [("value", ctypes.c_longlong)]
 

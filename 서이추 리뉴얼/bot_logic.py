@@ -43,6 +43,7 @@ class NaverBotLogic:
         self._chrome_process_id = None
         self._chrome_user_data_dir = None
         self._embed_attempt_count = 0
+        self._webview2_mode = bool(config.get("use_webview2_panel")) and self._is_windows
 
         # 성능 설정
         self.page_load_timeout = config.get("page_load_timeout")
@@ -208,8 +209,8 @@ class NaverBotLogic:
 
         self.log("🖥️ 크롬 브라우저 실행 중...")
         try:
-            # 포트가 닫혀있으면 크롬 프로세스 실행
-            if not self._is_debug_port_open(debug_port):
+            # WebView2 모드에서는 WebView2가 브라우저를 이미 띄우므로 Chrome 프로세스 실행 불필요
+            if not self._is_debug_port_open(debug_port) and not self._webview2_mode:
                 self._launch_chrome_process(debug_port, initial_url=initial_url)
 
             # 디버그 포트가 실제로 열릴 때까지 대기 (최대 15초)
@@ -222,6 +223,18 @@ class NaverBotLogic:
             self.driver = None
             for _ in range(20):
                 try:
+                    if self._webview2_mode:
+                        try:
+                            from selenium.webdriver.edge.options import Options as EdgeOptions
+                            from selenium.webdriver import Edge
+                            edge_opts = EdgeOptions()
+                            edge_opts.add_experimental_option("debuggerAddress", f"127.0.0.1:{debug_port}")
+                            edge_opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+                            edge_opts.page_load_strategy = "eager"
+                            self.driver = Edge(options=edge_opts)
+                            break
+                        except Exception:
+                            pass  # EdgeDriver 실패 시 ChromeDriver로 폴백
                     chrome_options = Options()
                     chrome_options.add_experimental_option("debuggerAddress", f"127.0.0.1:{debug_port}")
                     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
