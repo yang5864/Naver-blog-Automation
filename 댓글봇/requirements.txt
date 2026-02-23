@@ -1,5 +1,0 @@
-customtkinter
-selenium
-pyperclip
-comtypes
-websocket-client
