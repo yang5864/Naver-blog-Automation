@@ -44,6 +44,8 @@ class NaverBotLogic:
         self.current_count = 0
         self.neighbor_msg = config.get("neighbor_msg")
         self.comment_msg = config.get("comment_msg")
+        self.my_blog_id = str(config.get("my_blog_id") or "").strip()
+        self.my_nickname = str(config.get("my_nickname") or "").strip()
         self.embed_browser_windows = bool(config.get("embed_browser_windows"))
         self._is_windows = platform.system() == "Windows"
         self._embedded_chrome_hwnd = None
@@ -304,8 +306,32 @@ class NaverBotLogic:
         except Exception:
             return ""
 
+    def _ensure_my_blog_id(self):
+        """my_blog_id가 비어 있으면 로그인 세션으로 자동 감지."""
+        if str(self.my_blog_id or "").strip():
+            return self.my_blog_id
+        if not self.driver:
+            return ""
+        try:
+            if not self.safe_get(self.driver, "https://m.blog.naver.com/MyBlog.naver"):
+                return ""
+            current_url = self._get_current_url()
+            match = re.search(r"m\.blog\.naver\.com\/([a-zA-Z0-9_-]+)", current_url or "", re.IGNORECASE)
+            if not match:
+                return ""
+            detected = (match.group(1) or "").strip()
+            detected_lower = detected.lower()
+            if detected and detected_lower not in {"myblog", "myblog.naver"}:
+                self.my_blog_id = detected
+                self.log(f"   ↪ 내 블로그 ID 자동 감지: {self.my_blog_id}")
+                return self.my_blog_id
+        except Exception:
+            pass
+        return ""
+
     def _append_blog_ids_from_links(self, links, processed_ids, queue, blacklist):
         new_count = 0
+        my_id_clean = str(self.my_blog_id or "").strip().lower()
         if not isinstance(links, list):
             return new_count
         for href in links:
@@ -319,6 +345,8 @@ class NaverBotLogic:
                 bid = match.group(1)
                 bid_lower = bid.lower()
                 if bid_lower in blacklist:
+                    continue
+                if my_id_clean and bid_lower == my_id_clean:
                     continue
                 if bid in processed_ids or len(bid) <= 3:
                     continue
@@ -590,6 +618,26 @@ class NaverBotLogic:
 
             self.safe_sleep(self.normal_wait)
 
+            if self.my_nickname:
+                try:
+                    nickname_json = json.dumps(self.my_nickname)
+                    check_script = """
+                    var mine = __MINE__.trim();
+                    if (!mine) return false;
+                    var nicks = Array.from(document.querySelectorAll("span.u_cbox_nick"));
+                    return nicks.some(function(el){ return (el.innerText || '').trim() === mine; });
+                    """.replace("__MINE__", nickname_json)
+                    already_commented = bool(
+                        self._cdp_eval(
+                            check_script,
+                            timeout=3.0,
+                        )
+                    )
+                    if already_commented:
+                        return "스킵(이미 댓글 씀)"
+                except Exception:
+                    pass
+
             target_nickname = str(
                 self._cdp_eval(
                     """
@@ -670,20 +718,27 @@ class NaverBotLogic:
         """검색 결과에서 '블로그' 탭 클릭."""
         if self._webview2_mode:
             try:
-                clicked = self._cdp_eval(
+                clicked_state = self._cdp_eval(
                     """
-                    var tabs = Array.from(document.querySelectorAll("[role='tab'], .tab, .lnb_item a, a, button"));
+                    var href = location.href || '';
+                    if (href.indexOf("search.naver.com/search.naver") >= 0 && href.indexOf("where=blog") >= 0) {
+                        return "ALREADY";
+                    }
+                    var tabs = Array.from(document.querySelectorAll("[role='tab'], .tab, .lnb_item a"));
                     var blogTab = tabs.find(function(el){
                         var txt = (el.innerText || el.textContent || '').trim();
                         return txt.indexOf('블로그') >= 0;
                     });
+                    if (!blogTab) {
+                        blogTab = Array.from(document.querySelectorAll("a[href*='search.naver.com/search.naver'][href*='where=blog']"))[0] || null;
+                    }
                     if (!blogTab) return false;
                     blogTab.click();
-                    return true;
+                    return "CLICKED";
                     """,
                     timeout=4.0,
                 )
-                if clicked:
+                if clicked_state in ("CLICKED", "ALREADY"):
                     self.log("   ↪ '블로그' 탭 클릭...")
                     self.safe_sleep(1.0)
             except Exception:
@@ -1571,6 +1626,15 @@ class NaverBotLogic:
             self.safe_click(driver, comment_btn)
             self.safe_sleep(self.normal_wait)
 
+            if self.my_nickname:
+                try:
+                    existing_nicks = driver.find_elements(By.CSS_SELECTOR, "span.u_cbox_nick")
+                    for nick_el in existing_nicks:
+                        if self.my_nickname == (nick_el.text or "").strip():
+                            return "스킵(이미 댓글 씀)"
+                except (NoSuchElementException, StaleElementReferenceException, WebDriverException):
+                    pass
+
             input_box = self.safe_find_element(
                 driver, By.CSS_SELECTOR, ".u_cbox_text_mention, .u_cbox_inbox textarea", timeout=3
             )
@@ -1648,7 +1712,8 @@ class NaverBotLogic:
 
             blog_id = queue.pop(0)
             blacklist = {"myblog", "postlist", "buddyaddform", "likeit", "nvisitor", "blog", "domainid", "admin", "search"}
-            if blog_id.lower() in blacklist:
+            my_id_clean = str(self.my_blog_id or "").strip().lower()
+            if blog_id.lower() in blacklist or (my_id_clean and blog_id.lower() == my_id_clean):
                 continue
 
             self.log(f"\n▶️ [{self.current_count+1}/{self.target_count}] '{blog_id}' 작업 시작")
@@ -1713,6 +1778,11 @@ class NaverBotLogic:
 
         self.neighbor_msg = neighbor_msg
         self.comment_msg = comment_msg
+        # config에서 갱신된 사용자 식별값 반영
+        self.my_blog_id = str(self.config.get("my_blog_id") or "").strip()
+        self.my_nickname = str(self.config.get("my_nickname") or "").strip()
+        if not self.my_blog_id:
+            self._ensure_my_blog_id()
         self.target_count = target_count
         self.is_running = True
         self.current_count = 0
@@ -1763,7 +1833,8 @@ class NaverBotLogic:
 
             blog_id = queue.pop(0)
             blacklist = {"myblog", "postlist", "buddyaddform", "likeit", "nvisitor", "blog", "domainid", "admin", "search"}
-            if blog_id.lower() in blacklist:
+            my_id_clean = str(self.my_blog_id or "").strip().lower()
+            if blog_id.lower() in blacklist or (my_id_clean and blog_id.lower() == my_id_clean):
                 continue
 
             self.log(f"\n▶️ [{self.current_count+1}/{self.target_count}] '{blog_id}' 작업 시작")
