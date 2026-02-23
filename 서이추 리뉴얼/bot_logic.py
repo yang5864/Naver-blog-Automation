@@ -59,6 +59,9 @@ class NaverBotLogic:
         if seconds > 0:
             time.sleep(seconds)
 
+    def set_webview2_mode(self, enabled):
+        self._webview2_mode = bool(enabled) and self._is_windows
+
     def _close_tab_and_return(self, main_window):
         """현재 탭 닫고 메인 윈도우로 복귀."""
         try:

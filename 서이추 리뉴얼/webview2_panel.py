@@ -69,8 +69,10 @@ class WebView2PanelHost:
 
         self._debug_port = 0
         self._user_data_folder = ""
-        self._env_options_obj = None
-        self._env_options_ptr = None
+
+    @property
+    def debug_port(self):
+        return int(self._debug_port or 0)
 
     @property
     def is_ready(self):
@@ -140,6 +142,15 @@ class WebView2PanelHost:
         self._coinit_done = True
         return True
 
+    def _apply_debug_env_args(self):
+        if self._debug_port <= 0:
+            return
+        flag = f"--remote-debugging-port={int(self._debug_port)}"
+        current = (os.environ.get("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "") or "").strip()
+        if flag in current:
+            return
+        os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = f"{current} {flag}".strip()
+
     def start(self, parent_hwnd, bounds, initial_url="about:blank",
               debug_port=None, user_data_folder=None):
         """WebView2 생성 시작(비동기)."""
@@ -178,7 +189,7 @@ class WebView2PanelHost:
                 create_env.argtypes = [
                     ctypes.c_wchar_p,
                     ctypes.c_wchar_p,
-                    POINTER(ICoreWebView2EnvironmentOptions),
+                    ctypes.c_void_p,
                     POINTER(ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler),
                 ]
                 create_env.restype = HRESULT
@@ -191,15 +202,14 @@ class WebView2PanelHost:
             self._debug_port = int(debug_port or 9222)
             self._user_data_folder = str(user_data_folder or os.path.expanduser("~/WebView2BotData"))
             os.makedirs(self._user_data_folder, exist_ok=True)
-
-            self._env_options_obj = _EnvironmentOptions(f"--remote-debugging-port={self._debug_port}")
-            self._env_options_ptr = self._env_options_obj.QueryInterface(ICoreWebView2EnvironmentOptions)
+            self._apply_debug_env_args()
+            self._log_info(f"임베드 세션 포트: {self._debug_port}")
 
             self._env_handler_obj = _EnvironmentCompletedHandler(self)
             self._env_handler_ptr = self._env_handler_obj.QueryInterface(
                 ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler
             )
-            hr = self._create_env_func(None, self._user_data_folder, self._env_options_ptr, self._env_handler_ptr)
+            hr = self._create_env_func(None, self._user_data_folder, None, self._env_handler_ptr)
         except Exception as exc:
             self._set_error(f"환경 생성 요청 실패: {exc}")
             return False

@@ -30,6 +30,8 @@ class App(ctk.CTk):
         self.logic = NaverBotLogic(config, self.log_msg, self.update_prog, self.update_browser_status, gui_window=self)
         self.embed_browser_windows = bool(self.config.get("embed_browser_windows")) and platform.system() == "Windows"
         self.use_webview2_panel = bool(self.config.get("use_webview2_panel")) and platform.system() == "Windows"
+        if hasattr(self.logic, "set_webview2_mode"):
+            self.logic.set_webview2_mode(self.use_webview2_panel)
         self._browser_embed_rect = (0, 0, 100, 100)
         self._browser_embed_hwnd = 0
         self._browser_embed_client_rect = (0, 0, 100, 100)
@@ -467,12 +469,16 @@ class App(ctk.CTk):
         if WebView2PanelHost is None:
             self.log_msg("⚠️ WebView2 모듈 로드 실패. Chrome 임베드 모드로 동작합니다.")
             self.use_webview2_panel = False
+            if hasattr(self.logic, "set_webview2_mode"):
+                self.logic.set_webview2_mode(False)
             return
         self.webview2_host = WebView2PanelHost(self.log_msg)
         if not self.webview2_host.is_available:
             self.log_msg(f"⚠️ WebView2 사용 불가: {self.webview2_host.unavailable_reason}")
             self.use_webview2_panel = False
             self.webview2_host = None
+            if hasattr(self.logic, "set_webview2_mode"):
+                self.logic.set_webview2_mode(False)
             return
         self.log_msg("🌐 WebView2 내장 패널 초기화 준비")
         self.update_browser_status("WebView2 준비 중...", "blue")
@@ -496,6 +502,8 @@ class App(ctk.CTk):
             self.log_msg(f"⚠️ WebView2 시작 실패: {self.webview2_host.last_error}")
             self.use_webview2_panel = False
             self.webview2_host = None
+            if hasattr(self.logic, "set_webview2_mode"):
+                self.logic.set_webview2_mode(False)
             return
         self._webview2_poll_count = 0
         self.after(120, self._poll_webview2_ready)
@@ -522,6 +530,8 @@ class App(ctk.CTk):
         self.log_msg("⚠️ WebView2 준비 시간 초과. Chrome 임베드 모드로 동작합니다.")
         self.use_webview2_panel = False
         self.webview2_host = None
+        if hasattr(self.logic, "set_webview2_mode"):
+            self.logic.set_webview2_mode(False)
 
     def _resize_webview2_panel(self):
         if not self.webview2_host:
