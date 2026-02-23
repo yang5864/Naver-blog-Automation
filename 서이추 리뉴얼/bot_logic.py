@@ -1332,39 +1332,32 @@ class NaverBotLogic:
 
     def open_login_page(self):
         login_url = "https://nid.naver.com/nidlogin.login"
-        if self._webview2_mode:
-            if not self.connect_driver(initial_url=login_url):
-                return False
-            self.log("🌐 네이버 로그인 페이지 열기...")
-            if self.safe_get(self.driver, login_url):
-                self.update_status("로그인 페이지", "blue")
-                return True
-            self.update_status("브라우저 오류", "red")
+        home_url = "https://m.blog.naver.com/"
+
+        if not self.connect_driver(initial_url=home_url):
             return False
 
-        debug_port = self._get_debug_port()
-
-        # 먼저 로그인 URL로 크롬 프로세스를 띄워 UI 노출 속도를 우선 확보
-        if not self.driver and not self._is_debug_port_open(debug_port):
-            try:
-                self._launch_chrome_process(debug_port, initial_url=login_url)
-            except Exception:
-                pass
-
-        if not self.connect_driver(initial_url=login_url):
-            return False
-
-        self.log("🌐 네이버 로그인 페이지 열기...")
         try:
-            if "nid.naver.com/nidlogin.login" not in (self.driver.current_url or ""):
-                self.driver.get(login_url)
+            if self.check_login_status():
+                self.log("✅ 이전 로그인 세션 감지: 자동 로그인 완료")
+                self.update_status("자동 로그인됨", "green")
+                try:
+                    self.safe_get(self.driver, home_url)
+                except Exception:
+                    pass
+                return True
+        except Exception as e:
+            self.log(f"⚠️ 로그인 상태 확인 실패: {str(e)[:30]}")
+
+        self.log("🔓 최초 1회 로그인 필요: 네이버 로그인 페이지로 이동합니다.")
+        if self.safe_get(self.driver, login_url):
             self.update_status("로그인 페이지", "blue")
             return True
-        except Exception as e:
-            self.log(f"❌ 로그인 페이지 이동 실패: {str(e)[:30]}")
-            self.driver = None
-            self.update_status("브라우저 오류", "red")
-            return False
+
+        self.log("❌ 로그인 페이지 이동 실패")
+        self.driver = None
+        self.update_status("브라우저 오류", "red")
+        return False
 
     def search_keyword(self, keyword):
         if not self.connect_driver():
@@ -1841,8 +1834,8 @@ class NaverBotLogic:
             return
 
         if not self.check_login_status():
-            self.log("❌ 로그인이 필요합니다!")
-            self.update_status("로그인 필요", "red")
+            self.log("❌ 로그인이 필요합니다! 최초 1회 로그인 후 다시 시작하세요.")
+            self.open_login_page()
             return
 
         self.neighbor_msg = neighbor_msg

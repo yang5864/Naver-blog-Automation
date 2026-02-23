@@ -41,6 +41,7 @@ class App(ctk.CTk):
         self._webview2_settle_remaining = 0
         self._webview2_resize_job = None
         self._engine_connecting = False
+        self._auto_login_checked = False
 
         # 부드러운 스크롤 상태
         self._scroll_velocity = 0.0
@@ -495,7 +496,7 @@ class App(ctk.CTk):
         started = self.webview2_host.start(
             self.get_browser_embed_hwnd(),
             (x, y, w, h),
-            "https://nid.naver.com/nidlogin.login",
+            "https://m.blog.naver.com/",
             debug_port=debug_port,
             user_data_folder=user_data_folder,
         )
@@ -577,9 +578,14 @@ class App(ctk.CTk):
         if ok:
             self.btn_start.configure(state="normal", text="작업 시작")
             self.log_msg("✅ 자동화 엔진 연결 완료. 로그인 후 작업을 시작하세요.")
+            if self.use_webview2_panel and not self._auto_login_checked:
+                self._auto_login_checked = True
+                threading.Thread(target=self._thread_open_login_page, daemon=True).start()
             return
         self.btn_start.configure(state="normal", text="작업 시작 (준비중)")
         self.log_msg("⚠️ 자동화 엔진 연결 실패. '작업 시작'을 다시 누르면 재시도합니다.")
+        if self.use_webview2_panel:
+            self._auto_login_checked = False
 
     def _on_close(self):
         try:
@@ -597,7 +603,7 @@ class App(ctk.CTk):
 
     def _auto_open_login_page(self):
         if self.use_webview2_panel:
-            self.log_msg("🔓 WebView2 패널에서 네이버 로그인을 진행하세요.")
+            self.log_msg("🔐 로그인 상태를 확인 중입니다. 최초 1회만 로그인하면 이후 자동 로그인됩니다.")
             return
         threading.Thread(target=self._thread_open_login_page, daemon=True).start()
 
@@ -780,8 +786,8 @@ class App(ctk.CTk):
     # ------------------------------------------------------------------
     def _thread_open_login_page(self):
         ok = self.logic.open_login_page()
-        if ok:
-            self.log_msg("🔓 브라우저에서 네이버 로그인을 진행하세요.")
+        if not ok:
+            self.log_msg("⚠️ 로그인 페이지 준비 실패. 잠시 후 다시 시도하세요.")
 
     def on_search(self):
         k = self.entry_keyword.get()
