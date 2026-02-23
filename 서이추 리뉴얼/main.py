@@ -1,10 +1,13 @@
 import sys
 import os
+import traceback
 import warnings
 import logging
 
 # 스크립트 디렉토리를 sys.path 맨 앞에 추가 (Windows 더블클릭 실행 등 대비)
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# frozen(PyInstaller exe) 환경에서는 불필요하므로 건너뜀
+if not getattr(sys, "frozen", False):
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import customtkinter as ctk
 
@@ -41,5 +44,16 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         logging.exception("치명적 오류")
-        print(f"에러 발생: {e}", file=sys.stderr)
+        err_text = traceback.format_exc()
+        print(err_text, file=sys.stderr)
+        # exe 실행 시 콘솔이 없으므로 팝업으로 에러 표시
+        try:
+            import tkinter as tk
+            from tkinter import messagebox
+            _root = tk.Tk()
+            _root.withdraw()
+            messagebox.showerror("실행 오류", err_text)
+            _root.destroy()
+        except Exception:
+            pass
         raise
