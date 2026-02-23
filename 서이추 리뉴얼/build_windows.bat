@@ -24,8 +24,12 @@ echo [INFO] Closing running SeoiChuPro if exists...
 taskkill /F /IM SeoiChuPro.exe >nul 2>nul
 timeout /t 1 /nobreak >nul
 
-set "DIST_OUT=dist_run_%RANDOM%_%RANDOM%"
-set "WORK_OUT=build_run_%RANDOM%_%RANDOM%"
+call :CLEAN_OLD_RANDOM_RUN_DIRS
+
+set "DIST_OUT=dist_run"
+set "WORK_OUT=build_run"
+
+call :CLEAN_ACTIVE_RUN_DIRS
 
 call :RUN_BUILD
 
@@ -33,8 +37,7 @@ if errorlevel 1 (
   echo [WARN] First build failed. Retrying once after cleanup...
   taskkill /F /IM SeoiChuPro.exe >nul 2>nul
   timeout /t 1 /nobreak >nul
-  set "DIST_OUT=dist_run_%RANDOM%_%RANDOM%"
-  set "WORK_OUT=build_run_%RANDOM%_%RANDOM%"
+  call :CLEAN_ACTIVE_RUN_DIRS
   call :RUN_BUILD
   if errorlevel 1 (
     echo.
@@ -49,6 +52,20 @@ if exist dist_latest rmdir /s /q dist_latest
 xcopy "%DIST_OUT%\SeoiChuPro" "dist_latest\SeoiChuPro\" /e /i /y >nul
 echo [DONE] Latest copy: dist_latest\SeoiChuPro\SeoiChuPro.exe
 endlocal
+exit /b 0
+
+:CLEAN_OLD_RANDOM_RUN_DIRS
+for /d %%D in (dist_run_*) do (
+  if exist "%%D" rmdir /s /q "%%D"
+)
+for /d %%D in (build_run_*) do (
+  if exist "%%D" rmdir /s /q "%%D"
+)
+exit /b 0
+
+:CLEAN_ACTIVE_RUN_DIRS
+if exist "%DIST_OUT%" rmdir /s /q "%DIST_OUT%"
+if exist "%WORK_OUT%" rmdir /s /q "%WORK_OUT%"
 exit /b 0
 
 :RUN_BUILD
