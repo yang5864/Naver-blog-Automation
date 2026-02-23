@@ -145,11 +145,16 @@ class WebView2PanelHost:
     def _apply_debug_env_args(self):
         if self._debug_port <= 0:
             return
-        flag = f"--remote-debugging-port={int(self._debug_port)}"
         current = (os.environ.get("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "") or "").strip()
-        if flag in current:
-            return
-        os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = f"{current} {flag}".strip()
+        required_flags = [
+            f"--remote-debugging-port={int(self._debug_port)}",
+            "--remote-debugging-address=127.0.0.1",
+            "--remote-allow-origins=*",
+        ]
+        for flag in required_flags:
+            if flag not in current:
+                current = f"{current} {flag}".strip()
+        os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = current
 
     def start(self, parent_hwnd, bounds, initial_url="about:blank",
               debug_port=None, user_data_folder=None):

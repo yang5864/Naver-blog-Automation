@@ -162,7 +162,7 @@ class NaverBotLogic:
             return False
 
         try:
-            self._cdp_ws = websocket.create_connection(ws_url, timeout=8.0, enable_multithread=True)
+            self._cdp_ws = self._open_cdp_socket(ws_url)
             self._cdp_msg_id = 0
             try:
                 self._cdp_cmd("Runtime.enable", timeout=2.0)
@@ -181,8 +181,35 @@ class NaverBotLogic:
             return True
         except Exception as e:
             self._close_cdp()
-            self.log(f"❌ CDP 소켓 연결 실패: {str(e)[:60]}")
+            err_text = str(e)
+            if "403" in err_text:
+                self.log("   ↪ 핸드셰이크 403: Origin 제한 가능성")
+            self.log(f"❌ CDP 소켓 연결 실패: {err_text[:180]}")
             return False
+
+    def _open_cdp_socket(self, ws_url):
+        strategies = [
+            {"suppress_origin": True},
+            {"origin": "http://127.0.0.1"},
+            {"origin": "http://localhost"},
+            {"origin": "null"},
+            {},
+        ]
+        last_error = None
+        for extra in strategies:
+            try:
+                kwargs = {
+                    "timeout": 8.0,
+                    "enable_multithread": True,
+                }
+                kwargs.update(extra)
+                return websocket.create_connection(ws_url, **kwargs)
+            except Exception as e:
+                last_error = e
+                continue
+        if last_error:
+            raise last_error
+        raise RuntimeError("CDP 소켓 연결 실패")
 
     def _cdp_cmd(self, method, params=None, timeout=8.0):
         if not self._cdp_ws:
