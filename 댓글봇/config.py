@@ -16,7 +16,7 @@ class AppConfig:
         "target_count": 100,
         "persona_profile": "30대 직장인, 공감 위주로 짧고 자연스럽게 댓글 작성",
         "gemini_api_key": "",
-        "gemini_model": "gemini-1.5-flash",
+        "gemini_model": "gemini-2.0-flash",
         "comment_max_chars": 90,
         "chrome_debug_port": 9222,
         "page_load_timeout": 15,

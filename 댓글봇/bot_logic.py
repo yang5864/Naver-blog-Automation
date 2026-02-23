@@ -9,6 +9,7 @@ import json
 import threading
 import urllib.request
 import urllib.parse
+import urllib.error
 
 
 from selenium import webdriver
@@ -46,7 +47,7 @@ class NaverBotLogic:
         self.persona_profile = str(config.get("persona_profile") or "").strip()
         self.gemini_api_key = str(config.get("gemini_api_key") or "").strip()
         self.comment_guide = str(config.get("comment_msg") or "").strip()
-        self.gemini_model = str(config.get("gemini_model") or "gemini-1.5-flash").strip()
+        self.gemini_model = str(config.get("gemini_model") or "gemini-2.0-flash").strip()
         self.my_blog_id = str(config.get("my_blog_id") or "").strip()
         self.embed_browser_windows = bool(config.get("embed_browser_windows"))
         self._is_windows = platform.system() == "Windows"
@@ -1470,34 +1471,53 @@ class NaverBotLogic:
             return fallback_text
         return text
 
+    def _extract_gemini_text(self, response_data):
+        if not isinstance(response_data, dict):
+            return ""
+        candidates = response_data.get("candidates") or []
+        for cand in candidates:
+            content = (cand or {}).get("content") or {}
+            parts = content.get("parts") or []
+            for part in parts:
+                text = str((part or {}).get("text") or "").strip()
+                if text:
+                    return text
+        return ""
+
     def _generate_comment_with_gemini(self, title, body_text):
         fallback = self._build_fallback_comment(title)
         api_key = str(self.gemini_api_key or "").strip()
         if not api_key:
+            self.log("⚠️ Gemini API 키가 비어 있어 기본 댓글을 사용합니다.")
             return fallback
 
         persona = str(self.persona_profile or "").strip() or "예의 있고 공감 중심의 블로그 방문자"
         guide = str(self.comment_guide or "").strip()
         body_excerpt = str(body_text or "").strip()
-        if len(body_excerpt) > 1200:
-            body_excerpt = body_excerpt[:1200]
+        if len(body_excerpt) > 1400:
+            body_excerpt = body_excerpt[:1400]
 
         prompt = (
             "너는 네이버 블로그 방문자 댓글 작성 도우미다.\n"
-            "아래 페르소나에 맞는 한국어 댓글 1개만 작성해.\n"
-            "- 길이: 1~2문장, 너무 길지 않게\n"
+            "아래 정보를 참고해서 한국어 댓글 1개만 작성해.\n"
+            "- 길이: 1~2문장\n"
             "- 톤: 자연스럽고 공손하게\n"
-            "- 금지: 해시태그, 이모지 남발, 과장된 광고 문구\n"
-            "- 출력: 댓글 문장만 출력\n\n"
+            "- 출력: 댓글 문장만\n\n"
             f"[페르소나]\n{persona}\n\n"
             f"[게시글 제목]\n{title or '제목 없음'}\n\n"
-            f"[게시글 본문 요약 재료]\n{body_excerpt or '본문 추출 실패'}\n\n"
-            f"[추가 가이드]\n{guide or '핵심에 공감하는 한 줄 댓글'}\n"
+            f"[게시글 본문]\n{body_excerpt or '본문 추출 실패'}\n\n"
+            f"[추가 가이드]\n{guide or '핵심에 공감하는 짧은 댓글'}\n"
         )
 
-        requested_model = str(self.gemini_model or "").strip() or "gemini-1.5-flash"
+        requested_model = str(self.gemini_model or "").strip() or "gemini-2.0-flash"
         model_candidates = []
-        for model_name in [requested_model, "gemini-1.5-flash", "gemini-1.5-flash-latest"]:
+        for model_name in [
+            requested_model,
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-exp",
+            "gemini-1.5-flash",
+            "gemini-1.5-flash-latest",
+        ]:
             if model_name and model_name not in model_candidates:
                 model_candidates.append(model_name)
 
@@ -1505,89 +1525,162 @@ class NaverBotLogic:
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.8,
-                "maxOutputTokens": 120,
+                "maxOutputTokens": 160,
             },
         }
 
-        for model_name in model_candidates:
-            url = (
-                "https://generativelanguage.googleapis.com/v1beta/models/"
-                f"{model_name}:generateContent?key={urllib.parse.quote(api_key)}"
-            )
-            req = urllib.request.Request(
-                url,
-                data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-            )
-            try:
-                with urllib.request.urlopen(req, timeout=18.0) as resp:
-                    data = json.loads(resp.read().decode("utf-8", errors="ignore") or "{}")
-                candidates = data.get("candidates") or []
-                for cand in candidates:
-                    content = cand.get("content") or {}
-                    parts = content.get("parts") or []
-                    for part in parts:
-                        text = str((part or {}).get("text") or "").strip()
-                        if text:
-                            return self._sanitize_comment_text(text, fallback)
-            except Exception:
-                continue
+        endpoints = [
+            "https://generativelanguage.googleapis.com/v1/models/{model}:generateContent",
+            "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        ]
+        last_error = ""
 
-        self.log("⚠️ Gemini 응답 실패: 기본 댓글로 대체합니다.")
+        for model_name in model_candidates:
+            for endpoint in endpoints:
+                url = endpoint.format(model=model_name)
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-goog-api-key": api_key,
+                    },
+                    method="POST",
+                )
+                try:
+                    with urllib.request.urlopen(req, timeout=20.0) as resp:
+                        data = json.loads(resp.read().decode("utf-8", errors="ignore") or "{}")
+                    text = self._extract_gemini_text(data)
+                    if text:
+                        return self._sanitize_comment_text(text, fallback)
+                    last_error = f"빈 응답 (model={model_name})"
+                except urllib.error.HTTPError as e:
+                    try:
+                        detail = e.read().decode("utf-8", errors="ignore")
+                    except Exception:
+                        detail = str(e)
+                    short_detail = re.sub(r"\s+", " ", detail).strip()[:140]
+                    last_error = f"HTTP {e.code} ({model_name}): {short_detail}"
+                except Exception as e:
+                    last_error = f"{model_name}: {str(e)[:120]}"
+
+        if last_error:
+            self.log(f"⚠️ Gemini 응답 실패: {last_error}")
+        else:
+            self.log("⚠️ Gemini 응답 실패: 원인 미확인")
+        self.log("   ↪ 기본 댓글 템플릿으로 대체합니다.")
         return fallback
 
     def _click_like_on_current_post(self):
         script = """
+        var docs = [document];
+        Array.from(document.querySelectorAll("iframe")).forEach(function(frame){
+            try {
+                if (frame.contentDocument && frame.contentDocument.body) {
+                    docs.push(frame.contentDocument);
+                }
+            } catch (e) {}
+        });
+
         var textOf = function(el) {
             return (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
         };
         var isVisible = function(el) {
+            if (!el) return false;
             var rect = el.getBoundingClientRect();
             return rect.width > 0 && rect.height > 0;
         };
-        var nodes = Array.from(document.querySelectorAll("button,a,[role='button'],span,div"));
-        var candidates = [];
-        for (var i = 0; i < nodes.length; i++) {
-            var el = nodes[i];
-            if (!isVisible(el)) continue;
-            var txt = textOf(el);
-            if (!txt) continue;
-            if (!/(공감|좋아요)/.test(txt)) continue;
-            if (/(댓글|답글|공유|이웃|구독|신고)/.test(txt)) continue;
-            candidates.push(el);
-        }
-
-        if (!candidates.length) return {state: 'not_found'};
-        for (var j = 0; j < Math.min(candidates.length, 8); j++) {
-            var target = candidates[j];
-            var ariaPressed = (target.getAttribute('aria-pressed') || '').toLowerCase();
-            var cls = (typeof target.className === 'string' ? target.className : '').toLowerCase();
-            var isOn = ariaPressed === 'true' || /(is_on|active|selected|_on)\\b/.test(cls);
-            if (isOn) return {state: 'already'};
+        var getClickable = function(el) {
+            var node = el;
+            var guard = 0;
+            while (node && guard < 4) {
+                var tag = (node.tagName || '').toUpperCase();
+                if (tag === 'BUTTON' || tag === 'A') return node;
+                node = node.parentElement;
+                guard += 1;
+            }
+            return el;
+        };
+        var isAlreadyOn = function(el) {
+            var aria = (el.getAttribute('aria-pressed') || '').toLowerCase();
+            var cls = (typeof el.className === 'string' ? el.className : '').toLowerCase();
+            return aria === 'true' || /(is_on|_on|active|selected|u_likeit_list_btn_on)/.test(cls);
+        };
+        var tryClick = function(el, doc) {
+            if (!el) return false;
+            var target = getClickable(el);
+            try { target.click(); } catch (e) {}
             try {
-                target.click();
-                return {state: 'liked'};
+                var view = doc.defaultView || window;
+                target.dispatchEvent(new view.MouseEvent('click', {bubbles: true, cancelable: true}));
             } catch (e) {}
+            return true;
+        };
+
+        var selectors = [
+            "button.u_likeit_list_btn",
+            "a.u_likeit_list_btn",
+            "button[class*='likeit'][class*='btn']",
+            "a[class*='likeit'][class*='btn']",
+            "[data-click-area*='like']",
+            "button[aria-label*='공감']",
+            "a[aria-label*='공감']",
+            "button[aria-label*='좋아요']",
+            "a[aria-label*='좋아요']"
+        ];
+
+        for (var d = 0; d < docs.length; d++) {
+            var doc = docs[d];
+            for (var s = 0; s < selectors.length; s++) {
+                var nodes = Array.from(doc.querySelectorAll(selectors[s]));
+                for (var i = 0; i < nodes.length; i++) {
+                    var el = nodes[i];
+                    if (!isVisible(el)) continue;
+                    if (isAlreadyOn(el)) return {state: 'already', source: selectors[s]};
+                    if (tryClick(el, doc)) return {state: 'liked', source: selectors[s]};
+                }
+            }
         }
-        return {state: 'not_found'};
+
+        for (var d2 = 0; d2 < docs.length; d2++) {
+            var doc2 = docs[d2];
+            var all = Array.from(doc2.querySelectorAll("button,a,[role='button'],span,div"));
+            for (var j = 0; j < Math.min(all.length, 400); j++) {
+                var node = all[j];
+                if (!isVisible(node)) continue;
+                var txt = textOf(node);
+                if (!txt || txt.length > 30) continue;
+                if (!/(공감|좋아요)/.test(txt)) continue;
+                if (/(댓글|답글|공유|이웃|구독|신고)/.test(txt)) continue;
+                if (isAlreadyOn(node)) return {state: 'already', source: 'text-match'};
+                if (tryClick(node, doc2)) return {state: 'liked', source: 'text-match'};
+            }
+        }
+        return {state: 'not_found', source: ''};
         """
+        for _ in range(3):
+            try:
+                if self._webview2_mode:
+                    result = self._cdp_eval(script, timeout=5.0)
+                else:
+                    result = self.driver.execute_script(script)
+            except Exception as e:
+                return "error", f"실패({str(e)[:24]})"
 
-        try:
-            if self._webview2_mode:
-                result = self._cdp_eval(script, timeout=4.0)
-            else:
-                result = self.driver.execute_script(script)
-        except Exception as e:
-            return "error", f"실패({str(e)[:20]})"
+            state = str((result or {}).get("state") or "")
+            source = str((result or {}).get("source") or "")
+            if state == "liked":
+                if source:
+                    return "liked", f"완료({source})"
+                return "liked", "완료"
+            if state == "already":
+                return "already", "이미 누름"
+            if state == "not_found":
+                self.safe_sleep(0.5)
+                continue
+            return "error", f"실패({state or 'unknown'})"
 
-        state = str((result or {}).get("state") or "")
-        if state == "liked":
-            return "liked", "완료"
-        if state == "already":
-            return "already", "이미 누름"
-        if state == "not_found":
-            return "not_found", "버튼 없음"
-        return "error", "실패"
+        return "not_found", "버튼 없음"
 
     def _submit_comment_on_current_post(self, comment_text):
         safe_comment = json.dumps(str(comment_text or ""), ensure_ascii=False)
@@ -1595,86 +1688,164 @@ class NaverBotLogic:
         var text = {safe_comment};
         if (!text) return {{state: 'empty'}};
 
+        var docs = [document];
+        Array.from(document.querySelectorAll("iframe")).forEach(function(frame) {{
+            try {{
+                if (frame.contentDocument && frame.contentDocument.body) {{
+                    docs.push(frame.contentDocument);
+                }}
+            }} catch (e) {{}}
+        }});
+
         var textOf = function(el) {{
             return (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
         }};
         var isVisible = function(el) {{
+            if (!el) return false;
             var rect = el.getBoundingClientRect();
             return rect.width > 0 && rect.height > 0;
         }};
-        var findTextarea = function() {{
-            var selectors = ['textarea', 'textarea.u_cbox_text', 'textarea#comment', 'textarea[name=\"comment\"]'];
-            for (var i = 0; i < selectors.length; i++) {{
-                var node = document.querySelector(selectors[i]);
-                if (node && isVisible(node)) return node;
+        var clickNode = function(el, doc) {{
+            if (!el) return;
+            try {{ el.click(); }} catch (e) {{}}
+            try {{
+                var view = doc.defaultView || window;
+                el.dispatchEvent(new view.MouseEvent('click', {{bubbles: true, cancelable: true}}));
+            }} catch (e) {{}}
+        }};
+        var openCommentEditor = function() {{
+            for (var d = 0; d < docs.length; d++) {{
+                var doc = docs[d];
+                var nodes = Array.from(doc.querySelectorAll("button,a,[role='button'],span,div"));
+                for (var i = 0; i < Math.min(nodes.length, 400); i++) {{
+                    var el = nodes[i];
+                    if (!isVisible(el)) continue;
+                    var txt = textOf(el);
+                    if (!txt || txt.length > 30) continue;
+                    if (!/(댓글|답글)/.test(txt)) continue;
+                    if (/(닫기|접기|취소)/.test(txt)) continue;
+                    clickNode(el, doc);
+                    return true;
+                }}
+            }}
+            return false;
+        }};
+        var findEditor = function() {{
+            var inputSelectors = [
+                "textarea.u_cbox_text",
+                "textarea#comment",
+                "textarea[name='comment']",
+                "textarea",
+                "div[contenteditable='true'][role='textbox']",
+                "div[contenteditable='true'].u_cbox_text_wrap",
+                "div[contenteditable='true']"
+            ];
+            for (var d = 0; d < docs.length; d++) {{
+                var doc = docs[d];
+                for (var s = 0; s < inputSelectors.length; s++) {{
+                    var el = doc.querySelector(inputSelectors[s]);
+                    if (el && isVisible(el)) return {{el: el, doc: doc}};
+                }}
             }}
             return null;
         }};
 
-        var textarea = findTextarea();
-        if (!textarea) {{
-            var openers = Array.from(document.querySelectorAll('button,a,span,div')).filter(function(el){{
-                if (!isVisible(el)) return false;
-                var txt = textOf(el);
-                if (!txt) return false;
-                if (/(댓글|답글)/.test(txt) && !/(닫기|접기)/.test(txt)) return true;
-                return false;
-            }});
-            if (openers.length) {{
-                try {{ openers[0].click(); }} catch (e) {{}}
-            }}
-            textarea = findTextarea();
+        var editorPair = findEditor();
+        if (!editorPair) {{
+            openCommentEditor();
+            editorPair = findEditor();
         }}
+        if (!editorPair) return {{state: 'no_input'}};
 
-        if (!textarea) return {{state: 'no_input'}};
-
+        var editor = editorPair.el;
+        var editorDoc = editorPair.doc;
         try {{
-            textarea.focus();
-            textarea.value = text;
-            textarea.dispatchEvent(new Event('input', {{ bubbles: true }}));
-            textarea.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            editor.focus();
+            if ((editor.tagName || '').toUpperCase() === 'TEXTAREA') {{
+                editor.value = text;
+            }} else {{
+                editor.textContent = text;
+            }}
+            editor.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            editor.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            editor.dispatchEvent(new KeyboardEvent('keyup', {{ bubbles: true, key: 'a' }}));
         }} catch (e) {{
             return {{state: 'input_error'}};
         }}
 
-        var submit = Array.from(document.querySelectorAll("button,a,input[type='button'],input[type='submit']")).find(function(el){{
-            if (!isVisible(el)) return false;
-            var txt = textOf(el) || (el.value || '').trim();
-            if (!txt) return false;
-            if (/(등록|작성|올리기|확인)/.test(txt) && !/(취소|삭제)/.test(txt)) return true;
-            return false;
-        }});
+        var submitSelectors = [
+            "button.u_cbox_btn_upload",
+            "button[class*='upload']",
+            "button[class*='submit']",
+            "a[class*='upload']",
+            "input[type='submit']",
+            "input[type='button']"
+        ];
+        var submit = null;
+        for (var ss = 0; ss < submitSelectors.length; ss++) {{
+            var cand = editorDoc.querySelector(submitSelectors[ss]);
+            if (cand && isVisible(cand)) {{
+                submit = cand;
+                break;
+            }}
+        }}
+        if (!submit) {{
+            var nodes2 = Array.from(editorDoc.querySelectorAll("button,a,input[type='button'],input[type='submit']"));
+            for (var n = 0; n < nodes2.length; n++) {{
+                var el2 = nodes2[n];
+                if (!isVisible(el2)) continue;
+                var txt2 = textOf(el2) || (el2.value || '').trim();
+                if (!txt2) continue;
+                if (/(등록|작성|올리기|확인)/.test(txt2) && !/(취소|삭제|닫기)/.test(txt2)) {{
+                    submit = el2;
+                    break;
+                }}
+            }}
+        }}
         if (!submit) return {{state: 'no_submit'}};
         if (submit.disabled || submit.getAttribute('aria-disabled') === 'true') return {{state: 'disabled'}};
 
         try {{
-            submit.click();
+            clickNode(submit, editorDoc);
             return {{state: 'posted'}};
         }} catch (e) {{
             return {{state: 'submit_error'}};
         }}
         """
+        last_state = "error"
+        for _ in range(4):
+            try:
+                if self._webview2_mode:
+                    result = self._cdp_eval(script, timeout=6.0)
+                else:
+                    result = self.driver.execute_script(script)
+            except Exception as e:
+                return "error", f"실패({str(e)[:24]})"
 
-        try:
-            if self._webview2_mode:
-                result = self._cdp_eval(script, timeout=5.0)
-            else:
-                result = self.driver.execute_script(script)
-        except Exception as e:
-            return "error", f"실패({str(e)[:20]})"
+            state = str((result or {}).get("state") or "")
+            last_state = state or "error"
+            if state == "posted":
+                return "posted", "등록 완료"
+            if state == "empty":
+                return "empty", "댓글 비어 있음"
+            if state == "disabled":
+                return "disabled", "등록 버튼 비활성화"
+            if state in {"no_input", "no_submit"}:
+                self.safe_sleep(0.6)
+                continue
+            if state in {"input_error", "submit_error"}:
+                self.safe_sleep(0.4)
+                continue
+            break
 
-        state = str((result or {}).get("state") or "")
-        if state == "posted":
-            return "posted", "등록 완료"
-        if state == "no_input":
-            return "no_input", "입력창 없음"
-        if state == "no_submit":
-            return "no_submit", "등록 버튼 없음"
-        if state == "disabled":
-            return "disabled", "등록 버튼 비활성화"
-        if state == "empty":
-            return "empty", "댓글 비어 있음"
-        return "error", "실패"
+        message_map = {
+            "no_input": "입력창 없음",
+            "no_submit": "등록 버튼 없음",
+            "input_error": "입력 실패",
+            "submit_error": "등록 클릭 실패",
+            "disabled": "등록 버튼 비활성화",
+        }
+        return "error", message_map.get(last_state, "실패")
 
     def _process_post_item(self, post_item):
         if not self.safe_get(self.driver, post_item["url"]):
@@ -1723,22 +1894,26 @@ class NaverBotLogic:
         queue = []
         consecutive_errors = 0
 
-        while self.is_running and self.current_count < self.target_count:
+        while self.is_running:
             if not queue:
                 self.log(f"🔄 모바일 홈 포스트 수집 중... (누적 처리: {self.current_count}개)")
                 if not self.safe_get(self.driver, feed_url):
-                    self.log("❌ 모바일 홈 진입 실패")
-                    break
+                    self.log("❌ 모바일 홈 진입 실패. 3초 후 재시도합니다.")
+                    self.safe_sleep(3.0)
+                    continue
                 self.safe_sleep(1.0)
 
                 queue = self._collect_feed_posts(seen_post_keys)
                 if not queue:
-                    self.log("⚠️ 처리 가능한 포스트를 찾지 못했습니다.")
-                    break
+                    self.log("⚠️ 처리 가능한 포스트를 찾지 못했습니다. 5초 후 다시 탐색합니다.")
+                    self.safe_sleep(5.0)
+                    if len(seen_post_keys) > 6000:
+                        seen_post_keys.clear()
+                    continue
                 self.log(f"   ✅ {len(queue)}개 포스트 수집 완료")
 
             post_item = queue.pop(0)
-            self.log(f"\n▶️ [{self.current_count+1}/{self.target_count}] 포스트 작업 시작")
+            self.log(f"\n▶️ #{self.current_count+1} 포스트 작업 시작")
             result = self._process_post_item(post_item)
 
             if result.get("fatal"):
@@ -1748,8 +1923,8 @@ class NaverBotLogic:
             if result.get("completed"):
                 consecutive_errors = 0
                 self.current_count += 1
-                self.update_progress(self.current_count / max(1, self.target_count))
-                self.log(f"   ✅ 완료 ({self.current_count}/{self.target_count})")
+                self.update_progress((self.current_count % 100) / 100.0)
+                self.log(f"   ✅ 완료 (누적 {self.current_count}개)")
             else:
                 consecutive_errors += 1
                 self.log(f"   ⚠️ 스킵: {result.get('reason')}")
@@ -1760,7 +1935,7 @@ class NaverBotLogic:
 
             self.safe_sleep(random.uniform(0.9, 1.6))
 
-    def start_working(self, target_count, persona_profile, gemini_api_key, comment_guide=""):
+    def start_working(self, persona_profile, gemini_api_key, comment_guide=""):
         if not self.connect_driver():
             self.log("❌ 브라우저 연결 실패")
             return
@@ -1773,6 +1948,7 @@ class NaverBotLogic:
         self.persona_profile = str(persona_profile or "").strip()
         self.gemini_api_key = str(gemini_api_key or "").strip()
         self.comment_guide = str(comment_guide or "").strip()
+        self.gemini_model = str(self.config.get("gemini_model") or "gemini-2.0-flash").strip()
         self.config.set("persona_profile", self.persona_profile)
         self.config.set("gemini_api_key", self.gemini_api_key)
         self.config.set("comment_msg", self.comment_guide)
@@ -1781,11 +1957,6 @@ class NaverBotLogic:
         self.my_blog_id = str(self.config.get("my_blog_id") or "").strip()
         if not self.my_blog_id:
             self._ensure_my_blog_id()
-
-        try:
-            self.target_count = max(1, int(target_count or 1))
-        except ValueError:
-            self.target_count = 1
 
         self.is_running = True
         self.current_count = 0
@@ -1798,8 +1969,5 @@ class NaverBotLogic:
             self._run_feed_loop()
         finally:
             self.is_running = False
-            if self.current_count >= self.target_count:
-                self.update_status("목표 달성", "green")
-            else:
-                self.update_status("작업 완료", "green")
+            self.update_status("작업 완료", "green")
             self.log("🏁 작업 종료")

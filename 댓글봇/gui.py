@@ -138,30 +138,79 @@ class App(ctk.CTk):
             self.frame_settings, text="설정", font=IOS_FONT_MEDIUM, text_color=IOS_COLORS["text_primary"]
         ).pack(anchor="w", padx=20, pady=(20, 14))
 
-        api_row = ctk.CTkFrame(self.frame_settings, fg_color="transparent")
-        api_row.pack(fill="x", padx=20, pady=(0, 12))
-        ctk.CTkLabel(api_row, text="Gemini API Key", font=IOS_FONT_REGULAR, text_color=IOS_COLORS["text_primary"]).pack(anchor="w")
+        self.settings_tabs = ctk.CTkTabview(
+            self.frame_settings,
+            fg_color=IOS_COLORS["input_bg"],
+            segmented_button_fg_color=IOS_COLORS["input_bg"],
+            segmented_button_selected_color=IOS_COLORS["primary"],
+            segmented_button_unselected_color=IOS_COLORS["card"],
+        )
+        self.settings_tabs.pack(fill="x", padx=20, pady=(0, 20))
+        self.settings_tabs.add("일반")
+        self.settings_tabs.add("API")
+
+        tab_general = self.settings_tabs.tab("일반")
+        tab_api = self.settings_tabs.tab("API")
+
+        ctk.CTkLabel(
+            tab_general,
+            text="실행 방식",
+            font=IOS_FONT_SMALL,
+            text_color=IOS_COLORS["text_secondary"],
+        ).pack(anchor="w", padx=12, pady=(12, 6))
+        ctk.CTkLabel(
+            tab_general,
+            text="중단 또는 프로그램 종료 전까지 계속 반복 실행",
+            font=IOS_FONT_REGULAR,
+            text_color=IOS_COLORS["text_primary"],
+        ).pack(anchor="w", padx=12, pady=(0, 12))
+
+        ctk.CTkLabel(
+            tab_api,
+            text="Gemini API Key",
+            font=IOS_FONT_SMALL,
+            text_color=IOS_COLORS["text_secondary"],
+        ).pack(anchor="w", padx=12, pady=(12, 6))
         self.entry_api_key = ctk.CTkEntry(
-            api_row,
+            tab_api,
             placeholder_text="AIza...",
             corner_radius=10,
             height=40,
             font=IOS_FONT_REGULAR,
-            fg_color=IOS_COLORS["input_bg"],
+            fg_color=IOS_COLORS["card"],
             border_width=0,
             show="*",
         )
-        self.entry_api_key.pack(fill="x", pady=(8, 0))
+        self.entry_api_key.pack(fill="x", padx=12, pady=(0, 10))
 
-        # 목표 개수
-        target_row = ctk.CTkFrame(self.frame_settings, fg_color="transparent")
-        target_row.pack(fill="x", padx=20, pady=(0, 20))
-        ctk.CTkLabel(target_row, text="목표 개수", font=IOS_FONT_REGULAR, text_color=IOS_COLORS["text_primary"]).pack(side="left")
-        self.entry_target = ctk.CTkEntry(
-            target_row, placeholder_text="100", width=100, corner_radius=10, height=40,
-            font=IOS_FONT_REGULAR, justify="center", fg_color=IOS_COLORS["input_bg"], border_width=0,
+        ctk.CTkLabel(
+            tab_api,
+            text="Gemini 모델",
+            font=IOS_FONT_SMALL,
+            text_color=IOS_COLORS["text_secondary"],
+        ).pack(anchor="w", padx=12, pady=(0, 6))
+        self.entry_model = ctk.CTkEntry(
+            tab_api,
+            placeholder_text="gemini-2.0-flash",
+            corner_radius=10,
+            height=36,
+            font=IOS_FONT_SMALL,
+            fg_color=IOS_COLORS["card"],
+            border_width=0,
         )
-        self.entry_target.pack(side="right")
+        self.entry_model.pack(fill="x", padx=12, pady=(0, 10))
+
+        self.btn_save_settings = ctk.CTkButton(
+            tab_api,
+            text="API 설정 저장",
+            command=self.on_save_settings,
+            fg_color=IOS_COLORS["primary"],
+            hover_color="#0063CC",
+            corner_radius=10,
+            height=36,
+            font=IOS_FONT_SMALL,
+        )
+        self.btn_save_settings.pack(fill="x", padx=12, pady=(0, 12))
 
         # ---- 댓글 가이드 카드 ----
         self.frame_msg = ctk.CTkFrame(
@@ -320,9 +369,6 @@ class App(ctk.CTk):
     # ------------------------------------------------------------------
     def _load_from_config(self):
         """config에서 GUI 필드 복원."""
-        target = self.config.get("target_count")
-        self.entry_target.insert(0, str(target))
-
         persona_profile = self.config.get("persona_profile")
         if persona_profile:
             self.txt_persona.insert("1.0", persona_profile)
@@ -331,20 +377,25 @@ class App(ctk.CTk):
         if gemini_api_key:
             self.entry_api_key.insert(0, gemini_api_key)
 
+        gemini_model = self.config.get("gemini_model")
+        if gemini_model:
+            self.entry_model.insert(0, str(gemini_model))
+
         comment_guide = self.config.get("comment_msg")
         if comment_guide:
             self.txt_msg.insert("1.0", comment_guide)
 
     def _save_to_config(self):
         """GUI 값을 config에 저장하고 JSON 기록."""
-        try:
-            self.config.set("target_count", int(self.entry_target.get() or "100"))
-        except ValueError:
-            self.config.set("target_count", 100)
         self.config.set("persona_profile", self.txt_persona.get("1.0", "end").strip())
         self.config.set("gemini_api_key", self.entry_api_key.get().strip())
+        self.config.set("gemini_model", self.entry_model.get().strip() or "gemini-2.0-flash")
         self.config.set("comment_msg", self.txt_msg.get("1.0", "end").strip())
         self.config.save()
+
+    def on_save_settings(self):
+        self._save_to_config()
+        self.log_msg("💾 API 설정이 저장되었습니다.")
 
     # ------------------------------------------------------------------
     # 스레드 안전 UI 업데이트
@@ -787,25 +838,20 @@ class App(ctk.CTk):
         # GUI → config → JSON 저장
         self._save_to_config()
 
-        try:
-            target_count = int(self.entry_target.get() or "100")
-        except ValueError:
-            target_count = 100
-
         comment_guide = self.txt_msg.get("1.0", "end").strip()
 
         self.btn_start.configure(state="disabled", text="시작 중...")
         self.btn_stop.configure(state="normal")
         self.update_idletasks()
-        self.log_msg(f"🚀 자동 좋아요/댓글 작업 시작 (목표: {target_count}개)")
+        self.log_msg("🚀 자동 좋아요/댓글 작업 시작 (중단 시까지 반복)")
         threading.Thread(
             target=self._thread_start,
-            args=(target_count, persona_profile, gemini_api_key, comment_guide),
+            args=(persona_profile, gemini_api_key, comment_guide),
             daemon=True,
         ).start()
 
-    def _thread_start(self, target_count, persona_profile, gemini_api_key, comment_guide):
-        self.logic.start_working(target_count, persona_profile, gemini_api_key, comment_guide)
+    def _thread_start(self, persona_profile, gemini_api_key, comment_guide):
+        self.logic.start_working(persona_profile, gemini_api_key, comment_guide)
         self.after(0, self._update_button_state)
 
     def _update_button_state(self):
