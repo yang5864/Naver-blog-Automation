@@ -100,71 +100,32 @@ class App(ctk.CTk):
         self.scrollable_frame.grid(row=1, column=0, sticky="nsew", padx=0, pady=0)
         self.scrollable_frame.grid_columnconfigure(0, weight=1)
 
-        # ---- 로그인 카드 ----
-        self.frame_login = ctk.CTkFrame(
-            self.scrollable_frame, fg_color=IOS_COLORS["card"], corner_radius=16
-        )
-        self.frame_login.grid(row=0, column=0, padx=20, pady=(20, 12), sticky="ew")
-
-        ctk.CTkLabel(
-            self.frame_login, text="로그인", font=IOS_FONT_MEDIUM, text_color=IOS_COLORS["text_primary"]
-        ).pack(anchor="w", padx=20, pady=(20, 14))
-
-        ctk.CTkLabel(
-            self.frame_login,
-            text="프로그램 실행 시 로그인 페이지가 자동으로 열립니다.",
-            font=IOS_FONT_REGULAR,
-            text_color=IOS_COLORS["text_secondary"],
-        ).pack(anchor="w", padx=20, pady=(0, 10))
-
-        self.lbl_login_hint = ctk.CTkLabel(
-            self.frame_login,
-            text="로그인 완료 후 '작업 시작'을 누르세요.",
-            font=IOS_FONT_SMALL,
-            text_color=IOS_COLORS["text_secondary"],
-        )
-        self.lbl_login_hint.pack(anchor="w", padx=20, pady=(0, 18))
-
-        # ---- 검색 카드 ----
+        # ---- 타깃 검색어 카드 ----
         self.frame_search = ctk.CTkFrame(
             self.scrollable_frame, fg_color=IOS_COLORS["card"], corner_radius=16
         )
-        self.frame_search.grid(row=1, column=0, padx=20, pady=12, sticky="ew")
-        self.frame_search.grid_columnconfigure(0, weight=1)
+        self.frame_search.grid(row=0, column=0, padx=20, pady=(20, 12), sticky="ew")
 
         ctk.CTkLabel(
-            self.frame_search, text="검색", font=IOS_FONT_MEDIUM, text_color=IOS_COLORS["text_primary"]
-        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=20, pady=(20, 14))
+            self.frame_search, text="타깃 검색어", font=IOS_FONT_MEDIUM, text_color=IOS_COLORS["text_primary"]
+        ).pack(anchor="w", padx=20, pady=(20, 14))
 
         self.entry_keyword = ctk.CTkEntry(
             self.frame_search,
-            placeholder_text="검색 키워드",
+            placeholder_text="서이추할 검색 키워드",
             corner_radius=10,
             height=48,
             font=IOS_FONT_REGULAR,
             fg_color=IOS_COLORS["input_bg"],
             border_width=0,
         )
-        self.entry_keyword.grid(row=1, column=0, padx=(20, 10), pady=(0, 20), sticky="ew")
-
-        self.btn_search = ctk.CTkButton(
-            self.frame_search,
-            text="이동",
-            width=80,
-            command=self.on_search,
-            fg_color=IOS_COLORS["secondary"],
-            hover_color="#4A4AC4",
-            corner_radius=10,
-            height=48,
-            font=("SF Pro Text", 15, "bold"),
-        )
-        self.btn_search.grid(row=1, column=1, padx=(0, 20), pady=(0, 20))
+        self.entry_keyword.pack(fill="x", padx=20, pady=(0, 20))
 
         # ---- 설정 카드 ----
         self.frame_settings = ctk.CTkFrame(
             self.scrollable_frame, fg_color=IOS_COLORS["card"], corner_radius=16
         )
-        self.frame_settings.grid(row=2, column=0, padx=20, pady=12, sticky="ew")
+        self.frame_settings.grid(row=1, column=0, padx=20, pady=12, sticky="ew")
 
         ctk.CTkLabel(
             self.frame_settings, text="설정", font=IOS_FONT_MEDIUM, text_color=IOS_COLORS["text_primary"]
@@ -184,7 +145,7 @@ class App(ctk.CTk):
         self.frame_msg = ctk.CTkFrame(
             self.scrollable_frame, fg_color=IOS_COLORS["card"], corner_radius=16
         )
-        self.frame_msg.grid(row=3, column=0, padx=20, pady=12, sticky="ew")
+        self.frame_msg.grid(row=2, column=0, padx=20, pady=12, sticky="ew")
 
         ctk.CTkLabel(
             self.frame_msg, text="메시지", font=IOS_FONT_MEDIUM, text_color=IOS_COLORS["text_primary"]
@@ -198,23 +159,13 @@ class App(ctk.CTk):
             self.frame_msg, height=75, corner_radius=10, font=IOS_FONT_SMALL,
             fg_color=IOS_COLORS["input_bg"], text_color=IOS_COLORS["text_primary"], border_width=0,
         )
-        self.txt_msg.pack(fill="x", padx=20, pady=(0, 14))
-
-        ctk.CTkLabel(
-            self.frame_msg, text="댓글 메시지", font=IOS_FONT_SMALL, text_color=IOS_COLORS["text_secondary"]
-        ).pack(anchor="w", padx=20, pady=(0, 8))
-
-        self.txt_cmt = ctk.CTkTextbox(
-            self.frame_msg, height=75, corner_radius=10, font=IOS_FONT_SMALL,
-            fg_color=IOS_COLORS["input_bg"], text_color=IOS_COLORS["text_primary"], border_width=0,
-        )
-        self.txt_cmt.pack(fill="x", padx=20, pady=(0, 20))
+        self.txt_msg.pack(fill="x", padx=20, pady=(0, 20))
 
         # ---- 액션 버튼 카드 ----
         action_frame = ctk.CTkFrame(
             self.scrollable_frame, fg_color=IOS_COLORS["card"], corner_radius=16
         )
-        action_frame.grid(row=4, column=0, padx=20, pady=12, sticky="ew")
+        action_frame.grid(row=3, column=0, padx=20, pady=12, sticky="ew")
 
         self.btn_start = ctk.CTkButton(
             action_frame, text="작업 시작", command=self.on_start,
@@ -237,7 +188,7 @@ class App(ctk.CTk):
         progress_frame = ctk.CTkFrame(
             self.scrollable_frame, fg_color=IOS_COLORS["card"], corner_radius=16
         )
-        progress_frame.grid(row=5, column=0, padx=20, pady=12, sticky="ew")
+        progress_frame.grid(row=4, column=0, padx=20, pady=12, sticky="ew")
 
         ctk.CTkLabel(
             progress_frame, text="진행 상황", font=IOS_FONT_MEDIUM, text_color=IOS_COLORS["text_primary"]
@@ -258,7 +209,7 @@ class App(ctk.CTk):
         log_frame = ctk.CTkFrame(
             self.scrollable_frame, fg_color=IOS_COLORS["card"], corner_radius=16
         )
-        log_frame.grid(row=6, column=0, padx=20, pady=12, sticky="ew")
+        log_frame.grid(row=5, column=0, padx=20, pady=12, sticky="ew")
         log_frame.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
@@ -273,7 +224,7 @@ class App(ctk.CTk):
         self.txt_log.grid(row=1, column=0, padx=20, pady=(0, 20), sticky="nsew")
 
         # 독립 스크롤 대상 텍스트박스 등록
-        self._scrollable_textboxes = [self.txt_log, self.txt_msg, self.txt_cmt]
+        self._scrollable_textboxes = [self.txt_log, self.txt_msg]
 
         # ========== 오른쪽 패널 (브라우저 화면 영역) ==========
         self.right_panel = ctk.CTkFrame(
@@ -358,10 +309,6 @@ class App(ctk.CTk):
         if neighbor_msg:
             self.txt_msg.insert("1.0", neighbor_msg)
 
-        comment_msg = self.config.get("comment_msg")
-        if comment_msg:
-            self.txt_cmt.insert("1.0", comment_msg)
-
     def _save_to_config(self):
         """GUI 값을 config에 저장하고 JSON 기록."""
         self.config.set("keyword", self.entry_keyword.get().strip())
@@ -370,7 +317,6 @@ class App(ctk.CTk):
         except ValueError:
             self.config.set("target_count", 100)
         self.config.set("neighbor_msg", self.txt_msg.get("1.0", "end").strip())
-        self.config.set("comment_msg", self.txt_cmt.get("1.0", "end").strip())
         self.config.save()
 
     # ------------------------------------------------------------------
@@ -789,34 +735,6 @@ class App(ctk.CTk):
         if not ok:
             self.log_msg("⚠️ 로그인 페이지 준비 실패. 잠시 후 다시 시도하세요.")
 
-    def on_search(self):
-        k = self.entry_keyword.get()
-        if not k:
-            self.log_msg("⚠️ 키워드를 입력하세요.")
-            return
-        if self.use_webview2_panel:
-            if not self.webview2_host or not self.webview2_host.is_ready:
-                self.log_msg("⚠️ WebView2가 아직 준비되지 않았습니다. 잠시 후 다시 시도하세요.")
-                return
-            self._save_to_config()
-            query_url = f"https://search.naver.com/search.naver?where=blog&query={k}"
-            if self.webview2_host.navigate(query_url):
-                self.log_msg(f"🔍 WebView2 검색 이동: '{k}'")
-                self.update_browser_status(f"검색: {k}", "blue")
-            else:
-                self.log_msg("⚠️ WebView2 검색 이동 실패")
-            return
-        self.btn_search.configure(state="disabled", text="검색 중...")
-        self.update_idletasks()
-        self.log_msg(f"🔍 '{k}' 검색 중...")
-        threading.Thread(target=self._thread_search, args=(k,), daemon=True).start()
-
-    def _thread_search(self, k):
-        if not self.logic.driver:
-            self.logic.connect_driver()
-        self.logic.search_keyword(k)
-        self.after(0, lambda: self.btn_search.configure(state="normal", text="이동"))
-
     def on_start(self):
         if self.use_webview2_panel and not self.logic.driver:
             if self._engine_connecting:
@@ -831,7 +749,7 @@ class App(ctk.CTk):
 
         keyword = self.entry_keyword.get()
         if not keyword:
-            self.log_msg("⚠️ 검색 키워드를 입력하세요.")
+            self.log_msg("⚠️ 타깃 검색어를 입력하세요.")
             return
 
         # GUI → config → JSON 저장
@@ -843,23 +761,20 @@ class App(ctk.CTk):
             target_count = 100
 
         neighbor_msg = self.txt_msg.get("1.0", "end").strip()
-        comment_msg = self.txt_cmt.get("1.0", "end").strip()
 
         if not neighbor_msg:
             neighbor_msg = self.config.get("neighbor_msg")
-        if not comment_msg:
-            comment_msg = self.config.get("comment_msg")
 
         self.btn_start.configure(state="disabled", text="시작 중...")
         self.btn_stop.configure(state="normal")
         self.update_idletasks()
         self.log_msg(f"🚀 작업 시작: '{keyword}' (목표: {target_count}개)")
         threading.Thread(
-            target=self._thread_start, args=(keyword, target_count, neighbor_msg, comment_msg), daemon=True
+            target=self._thread_start, args=(keyword, target_count, neighbor_msg), daemon=True
         ).start()
 
-    def _thread_start(self, keyword, target_count, neighbor_msg, comment_msg):
-        self.logic.start_working(keyword, target_count, neighbor_msg, comment_msg)
+    def _thread_start(self, keyword, target_count, neighbor_msg):
+        self.logic.start_working(keyword, target_count, neighbor_msg)
         self.after(0, self._update_button_state)
 
     def _update_button_state(self):

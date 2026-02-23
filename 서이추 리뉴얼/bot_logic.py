@@ -22,7 +22,6 @@ from selenium.common.exceptions import (
     NoSuchElementException,
     StaleElementReferenceException,
 )
-from selenium.webdriver.common.action_chains import ActionChains
 
 from config import AppConfig
 
@@ -44,9 +43,7 @@ class NaverBotLogic:
         self.target_count = config.get("target_count")
         self.current_count = 0
         self.neighbor_msg = config.get("neighbor_msg")
-        self.comment_msg = config.get("comment_msg")
         self.my_blog_id = str(config.get("my_blog_id") or "").strip()
-        self.my_nickname = str(config.get("my_nickname") or "").strip()
         self.embed_browser_windows = bool(config.get("embed_browser_windows"))
         self._is_windows = platform.system() == "Windows"
         self._embedded_chrome_hwnd = None
@@ -555,143 +552,6 @@ class NaverBotLogic:
             return True, "신청 완료"
         except Exception as e:
             return False, f"에러: {str(e)[:15]}"
-
-    def _process_like_webview2(self):
-        try:
-            result = self._cdp_eval(
-                """
-                try {
-                    var wrapper = document.querySelector("a.u_likeit_button");
-                    if (!wrapper) return "NO_BUTTON";
-                    var isPressed = wrapper.getAttribute("aria-pressed") === "true";
-                    var cls = (wrapper.getAttribute("class") || "").split(/\\s+/);
-                    if (isPressed || cls.indexOf("on") >= 0) return "ALREADY";
-                    var icon = wrapper.querySelector("span.u_likeit_icon");
-                    (icon || wrapper).click();
-                    return "CLICKED";
-                } catch (e) {
-                    return "ERROR";
-                }
-                """,
-                timeout=4.0,
-            )
-            if result == "NO_BUTTON":
-                return "공감 버튼 없음"
-            if result == "ALREADY":
-                return "이미 공감함"
-            if result != "CLICKED":
-                return "공감 실패"
-
-            self.safe_sleep(self.normal_wait)
-            now_pressed = bool(
-                self._cdp_eval(
-                    """
-                    var wrapper = document.querySelector("a.u_likeit_button");
-                    if (!wrapper) return false;
-                    var isPressed = wrapper.getAttribute("aria-pressed") === "true";
-                    var cls = (wrapper.getAttribute("class") || "").split(/\\s+/);
-                    if (isPressed || cls.indexOf("on") >= 0) return true;
-                    wrapper.click();
-                    return true;
-                    """,
-                    timeout=3.0,
-                )
-            )
-            if now_pressed:
-                return "공감 ❤️"
-            return "공감 실패"
-        except Exception:
-            return "공감 실패"
-
-    def _process_comment_webview2(self, blog_id):
-        try:
-            opened = self._cdp_eval(
-                """
-                var btn = document.querySelector("button[class*='comment_btn'], a.btn_comment");
-                if (!btn) return false;
-                btn.click();
-                return true;
-                """,
-                timeout=4.0,
-            )
-            if not opened:
-                return "댓글 버튼 없음"
-
-            self.safe_sleep(self.normal_wait)
-
-            if self.my_nickname:
-                try:
-                    nickname_json = json.dumps(self.my_nickname)
-                    check_script = """
-                    var mine = __MINE__.trim();
-                    if (!mine) return false;
-                    var nicks = Array.from(document.querySelectorAll("span.u_cbox_nick"));
-                    return nicks.some(function(el){ return (el.innerText || '').trim() === mine; });
-                    """.replace("__MINE__", nickname_json)
-                    already_commented = bool(
-                        self._cdp_eval(
-                            check_script,
-                            timeout=3.0,
-                        )
-                    )
-                    if already_commented:
-                        return "스킵(이미 댓글 씀)"
-                except Exception:
-                    pass
-
-            target_nickname = str(
-                self._cdp_eval(
-                    """
-                    var nameEl = document.querySelector(".user_name, .blogger_name");
-                    if (!nameEl) return "";
-                    return (nameEl.innerText || nameEl.textContent || "").trim();
-                    """,
-                    timeout=3.0,
-                )
-                or ""
-            )
-            if not target_nickname:
-                target_nickname = blog_id
-
-            final_msg = self.comment_msg.format(name=target_nickname)
-            msg_json = json.dumps(final_msg)
-
-            typed = self._cdp_eval(
-                f"""
-                var box = document.querySelector(".u_cbox_text_mention, .u_cbox_inbox textarea");
-                if (!box) return false;
-                box.focus();
-                box.value = {msg_json};
-                box.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                box.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                return true;
-                """,
-                timeout=4.0,
-            )
-            if not typed:
-                return "입력창 없음"
-
-            self.safe_sleep(0.2)
-            submitted = self._cdp_eval(
-                """
-                var btn = document.querySelector(".u_cbox_btn_upload, .u_cbox_btn_complete");
-                if (!btn) return false;
-                btn.click();
-                return true;
-                """,
-                timeout=4.0,
-            )
-            if not submitted:
-                return "등록 버튼 없음"
-
-            self.safe_sleep(self.normal_wait)
-            layer_text = self._get_layer_popup_text_webview2()
-            if layer_text and ("차단" in layer_text or "스팸" in layer_text):
-                self._close_layer_popup_webview2()
-                return "실패(스팸 차단)"
-            return "댓글 💬"
-        except Exception:
-            return "댓글 실패"
 
     def _close_tab_and_return(self, main_window):
         """현재 탭 닫고 메인 윈도우로 복귀."""
@@ -1643,110 +1503,6 @@ class NaverBotLogic:
             return False, f"에러: {str(e)[:15]}"
 
     # ------------------------------------------------------------------
-    # 공감 / 댓글
-    # ------------------------------------------------------------------
-    def process_like(self, driver):
-        if self._webview2_mode:
-            return self._process_like_webview2()
-        try:
-            wrapper = self.safe_find_element(driver, By.CSS_SELECTOR, "a.u_likeit_button", timeout=3)
-            if not wrapper:
-                return "공감 버튼 없음"
-
-            is_pressed = wrapper.get_attribute("aria-pressed") == "true"
-            class_list = wrapper.get_attribute("class") or ""
-
-            if is_pressed or "on" in class_list.split():
-                return "이미 공감함"
-
-            try:
-                icon = wrapper.find_element(By.CSS_SELECTOR, "span.u_likeit_icon")
-                ActionChains(driver).move_to_element(icon).click().perform()
-                self.safe_sleep(self.normal_wait)
-
-                if wrapper.get_attribute("aria-pressed") != "true":
-                    driver.execute_script("arguments[0].click();", icon)
-                    self.safe_sleep(self.fast_wait)
-
-                return "공감 ❤️"
-            except (NoSuchElementException, StaleElementReferenceException):
-                self.safe_click(driver, wrapper)
-                return "공감 ❤️"
-        except WebDriverException:
-            return "공감 실패"
-
-    def process_comment(self, driver, blog_id):
-        if self._webview2_mode:
-            return self._process_comment_webview2(blog_id)
-        try:
-            comment_btn = self.safe_find_element(
-                driver, By.CSS_SELECTOR, "button[class*='comment_btn'], a.btn_comment", timeout=3
-            )
-            if not comment_btn:
-                return "댓글 버튼 없음"
-
-            self.safe_click(driver, comment_btn)
-            self.safe_sleep(self.normal_wait)
-
-            if self.my_nickname:
-                try:
-                    existing_nicks = driver.find_elements(By.CSS_SELECTOR, "span.u_cbox_nick")
-                    for nick_el in existing_nicks:
-                        if self.my_nickname == (nick_el.text or "").strip():
-                            return "스킵(이미 댓글 씀)"
-                except (NoSuchElementException, StaleElementReferenceException, WebDriverException):
-                    pass
-
-            input_box = self.safe_find_element(
-                driver, By.CSS_SELECTOR, ".u_cbox_text_mention, .u_cbox_inbox textarea", timeout=3
-            )
-            if not input_box:
-                return "입력창 없음"
-
-            target_nickname = blog_id
-            try:
-                name_el = driver.find_element(By.CSS_SELECTOR, ".user_name, .blogger_name")
-                target_nickname = name_el.text.strip() or blog_id
-            except (NoSuchElementException, StaleElementReferenceException):
-                pass
-
-            final_msg = self.comment_msg.format(name=target_nickname)
-            try:
-                ActionChains(driver).move_to_element(input_box).click().send_keys(final_msg).perform()
-            except WebDriverException:
-                driver.execute_script("""
-                    arguments[0].value = arguments[1];
-                    arguments[0].dispatchEvent(new Event('input', {bubbles: true}));
-                """, input_box, final_msg)
-
-            self.safe_sleep(0.2)
-
-            submit_btn = self.safe_find_element(
-                driver, By.CSS_SELECTOR, ".u_cbox_btn_upload, .u_cbox_btn_complete", timeout=2
-            )
-            if not submit_btn:
-                return "등록 버튼 없음"
-
-            self.safe_click(driver, submit_btn)
-
-            try:
-                WebDriverWait(driver, 0.5).until(EC.alert_is_present())
-                alert = driver.switch_to.alert
-                alert_text = alert.text
-                alert.accept()
-
-                if "차단" in alert_text or "스팸" in alert_text:
-                    return "실패(스팸 차단)"
-                return f"실패({alert_text[:10]})"
-            except (TimeoutException, NoSuchElementException):
-                pass
-
-            self.safe_sleep(self.normal_wait)
-            return "댓글 💬"
-        except WebDriverException:
-            return "댓글 실패"
-
-    # ------------------------------------------------------------------
     # 메인 자동화 루프
     # ------------------------------------------------------------------
     def _run_single_tab_loop(self, keyword):
@@ -1814,13 +1570,6 @@ class NaverBotLogic:
                 self.safe_sleep(self.normal_wait)
 
             if is_friend is True:
-                msg_like = self.process_like(self.driver)
-                self.log(f"   └ 공감: {msg_like}")
-
-                if "실패" not in msg_like and "없음" not in msg_like:
-                    msg_cmt = self.process_comment(self.driver, blog_id)
-                    self.log(f"   └ 댓글: {msg_cmt}")
-
                 self.current_count += 1
                 self.log(f"   ✅ 성공! (현재 {self.current_count}/{self.target_count})")
                 self.update_progress(self.current_count / self.target_count)
@@ -1828,7 +1577,7 @@ class NaverBotLogic:
             wait_time = random.uniform(0.8, 1.5)
             self.safe_sleep(wait_time)
 
-    def start_working(self, keyword, target_count, neighbor_msg, comment_msg):
+    def start_working(self, keyword, target_count, neighbor_msg):
         if not self.connect_driver():
             self.log("❌ 브라우저 연결 실패")
             return
@@ -1839,10 +1588,8 @@ class NaverBotLogic:
             return
 
         self.neighbor_msg = neighbor_msg
-        self.comment_msg = comment_msg
         # config에서 갱신된 사용자 식별값 반영
         self.my_blog_id = str(self.config.get("my_blog_id") or "").strip()
-        self.my_nickname = str(self.config.get("my_nickname") or "").strip()
         if not self.my_blog_id:
             self._ensure_my_blog_id()
         self.target_count = target_count
@@ -1852,6 +1599,13 @@ class NaverBotLogic:
         self.log("🚀 작업 시작")
         self.update_status("작업 실행 중...", "blue")
 
+        if self._webview2_mode:
+            self._run_single_tab_loop(keyword)
+            self.is_running = False
+            self.log("🏁 작업 종료")
+            self.update_status("작업 완료", "green")
+            return
+
         if not self._navigate_to_blog_search(keyword):
             self.log("❌ 검색 페이지 로드 실패")
             self.is_running = False
@@ -1859,13 +1613,6 @@ class NaverBotLogic:
             return
 
         self._click_blog_tab()
-
-        if self._webview2_mode:
-            self._run_single_tab_loop(keyword)
-            self.is_running = False
-            self.log("🏁 작업 종료")
-            self.update_status("작업 완료", "green")
-            return
 
         main_window = self.driver.current_window_handle
         processed_ids = set()
@@ -1947,13 +1694,6 @@ class NaverBotLogic:
                 self.safe_sleep(self.normal_wait)
 
             if is_friend is True:
-                msg_like = self.process_like(self.driver)
-                self.log(f"   └ 공감: {msg_like}")
-
-                if "실패" not in msg_like and "없음" not in msg_like:
-                    msg_cmt = self.process_comment(self.driver, blog_id)
-                    self.log(f"   └ 댓글: {msg_cmt}")
-
                 self.current_count += 1
                 self.log(f"   ✅ 성공! (현재 {self.current_count}/{self.target_count})")
                 self.update_progress(self.current_count / self.target_count)
