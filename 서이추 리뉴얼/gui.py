@@ -40,6 +40,7 @@ class App(ctk.CTk):
         self._webview2_poll_count = 0
         self._webview2_settle_remaining = 0
         self._webview2_resize_job = None
+        self._engine_connecting = False
 
         # 부드러운 스크롤 상태
         self._scroll_velocity = 0.0
@@ -556,18 +557,29 @@ class App(ctk.CTk):
             self.after(120, self._settle_webview2_bounds)
 
     def _connect_selenium_to_webview2(self):
+        if not self.use_webview2_panel:
+            return
+        if self._engine_connecting:
+            return
+        if self.logic.driver:
+            return
+        self._engine_connecting = True
+        self.btn_start.configure(state="disabled", text="엔진 연결 중...")
         self.log_msg("🔗 자동화 엔진 연결 중...")
         threading.Thread(target=self._thread_connect_selenium, daemon=True).start()
 
     def _thread_connect_selenium(self):
         ok = self.logic.connect_driver()
+        self.after(0, self._on_engine_connect_done, ok)
+
+    def _on_engine_connect_done(self, ok):
+        self._engine_connecting = False
         if ok:
-            self.after(0, lambda: (
-                self.btn_start.configure(state="normal", text="작업 시작"),
-                self.log_msg("✅ 자동화 엔진 연결 완료. 로그인 후 작업을 시작하세요.")
-            ))
-        else:
-            self.after(0, lambda: self.log_msg("⚠️ 자동화 엔진 연결 실패. 재시도하거나 Chrome 모드를 사용하세요."))
+            self.btn_start.configure(state="normal", text="작업 시작")
+            self.log_msg("✅ 자동화 엔진 연결 완료. 로그인 후 작업을 시작하세요.")
+            return
+        self.btn_start.configure(state="normal", text="작업 시작 (준비중)")
+        self.log_msg("⚠️ 자동화 엔진 연결 실패. '작업 시작'을 다시 누르면 재시도합니다.")
 
     def _on_close(self):
         try:
@@ -801,7 +813,11 @@ class App(ctk.CTk):
 
     def on_start(self):
         if self.use_webview2_panel and not self.logic.driver:
-            self.log_msg("⚠️ 자동화 엔진 연결 대기 중입니다. 잠시 후 다시 시도하세요.")
+            if self._engine_connecting:
+                self.log_msg("⚠️ 자동화 엔진 연결 대기 중입니다. 잠시 후 다시 시도하세요.")
+                return
+            self.log_msg("⚠️ 자동화 엔진 미연결 상태입니다. 지금 연결을 다시 시도합니다.")
+            self._connect_selenium_to_webview2()
             return
         if self.logic.is_running:
             self.log_msg("⚠️ 이미 실행 중입니다.")
