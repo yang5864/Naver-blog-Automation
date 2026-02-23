@@ -1,6 +1,10 @@
 import sys
+import os
 import warnings
 import logging
+
+# 스크립트 디렉토리를 sys.path 맨 앞에 추가 (Windows 더블클릭 실행 등 대비)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import customtkinter as ctk
 
