@@ -8,6 +8,7 @@ import socket
 import json
 import threading
 import urllib.request
+import urllib.parse
 
 
 from selenium import webdriver
@@ -717,29 +718,67 @@ class NaverBotLogic:
     def _click_blog_tab(self):
         """검색 결과에서 '블로그' 탭 클릭."""
         if self._webview2_mode:
+            for _ in range(5):
+                try:
+                    clicked_state = self._cdp_eval(
+                        """
+                        try {
+                            var blogTab = null;
+                            var tabs = Array.from(document.querySelectorAll("[role='tab'], .tab, .lnb_item a"));
+                            for (var i = 0; i < tabs.length; i++) {
+                                var txt = (tabs[i].innerText || tabs[i].textContent || '').trim();
+                                if (txt.indexOf('블로그') >= 0) {
+                                    blogTab = tabs[i];
+                                    break;
+                                }
+                            }
+                            if (!blogTab) {
+                                var candidates = Array.from(document.querySelectorAll("a[href*='search.naver.com/search.naver']"));
+                                blogTab = candidates.find(function(el){
+                                    var txt = (el.innerText || el.textContent || '').trim();
+                                    return txt.indexOf('블로그') >= 0;
+                                }) || null;
+                            }
+                            if (!blogTab) return "NONE";
+                            blogTab.click();
+                            return "CLICKED";
+                        } catch (e) {
+                            return "ERROR";
+                        }
+                        """,
+                        timeout=4.0,
+                    )
+                    if clicked_state == "CLICKED":
+                        self.log("   ↪ '블로그' 탭 클릭...")
+                        self.safe_sleep(1.0)
+                        return
+                except Exception:
+                    pass
+                self.safe_sleep(0.3)
+
+            # 클릭 실패 시 검색어를 유지한 채 블로그 결과로 강제 이동
             try:
-                clicked_state = self._cdp_eval(
+                forced = self._cdp_eval(
                     """
-                    var href = location.href || '';
-                    if (href.indexOf("search.naver.com/search.naver") >= 0 && href.indexOf("where=blog") >= 0) {
-                        return "ALREADY";
+                    try {
+                        var q = '';
+                        var u = new URL(location.href);
+                        q = u.searchParams.get('query') || '';
+                        if (!q) {
+                            var input = document.querySelector("input[name='query'], input#nx_query");
+                            q = input ? (input.value || '').trim() : '';
+                        }
+                        if (!q) return false;
+                        location.href = "https://search.naver.com/search.naver?where=blog&query=" + encodeURIComponent(q);
+                        return true;
+                    } catch (e) {
+                        return false;
                     }
-                    var tabs = Array.from(document.querySelectorAll("[role='tab'], .tab, .lnb_item a"));
-                    var blogTab = tabs.find(function(el){
-                        var txt = (el.innerText || el.textContent || '').trim();
-                        return txt.indexOf('블로그') >= 0;
-                    });
-                    if (!blogTab) {
-                        blogTab = Array.from(document.querySelectorAll("a[href*='search.naver.com/search.naver'][href*='where=blog']"))[0] || null;
-                    }
-                    if (!blogTab) return false;
-                    blogTab.click();
-                    return "CLICKED";
                     """,
                     timeout=4.0,
                 )
-                if clicked_state in ("CLICKED", "ALREADY"):
-                    self.log("   ↪ '블로그' 탭 클릭...")
+                if forced:
+                    self.log("   ↪ '블로그' 탭 강제 이동...")
                     self.safe_sleep(1.0)
             except Exception:
                 pass
@@ -756,11 +795,41 @@ class NaverBotLogic:
                     continue
 
             if not blog_tab:
-                blog_tab = self.driver.find_element(By.XPATH, "//a[contains(text(), '블로그')]")
+                candidates = self.driver.find_elements(By.XPATH, "//a[contains(text(), '블로그')]")
+                for cand in candidates:
+                    try:
+                        href = (cand.get_attribute("href") or "").lower()
+                        if "search.naver.com/search.naver" in href or "where=blog" in href:
+                            blog_tab = cand
+                            break
+                    except (StaleElementReferenceException, NoSuchElementException):
+                        continue
+                if not blog_tab and candidates:
+                    blog_tab = candidates[0]
 
             if blog_tab:
                 self.log("   ↪ '블로그' 탭 클릭...")
                 self.safe_click(self.driver, blog_tab)
+                self.safe_sleep(1.0)
+                return
+
+            # 클릭 실패 시 검색어를 유지한 채 블로그 결과로 강제 이동
+            q = ""
+            try:
+                m = re.search(r"[?&]query=([^&]+)", self.driver.current_url or "")
+                if m:
+                    q = urllib.parse.unquote_plus(m.group(1))
+            except Exception:
+                q = ""
+            if not q:
+                try:
+                    q_input = self.driver.find_element(By.CSS_SELECTOR, "input[name='query'], input#nx_query")
+                    q = (q_input.get_attribute("value") or "").strip()
+                except (NoSuchElementException, StaleElementReferenceException):
+                    q = ""
+            if q:
+                self.log("   ↪ '블로그' 탭 강제 이동...")
+                self.safe_get(self.driver, f"https://search.naver.com/search.naver?where=blog&query={q}")
                 self.safe_sleep(1.0)
         except (NoSuchElementException, StaleElementReferenceException):
             pass
