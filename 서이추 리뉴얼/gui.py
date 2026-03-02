@@ -43,11 +43,6 @@ class App(ctk.CTk):
         self._engine_connecting = False
         self._auto_login_checked = False
 
-        # 부드러운 스크롤 상태
-        self._scroll_velocity = 0.0
-        self._scroll_animating = False
-        self._scrollable_textboxes = []  # 독립 스크롤 대상 텍스트박스 목록
-
         # 좌우 분할 레이아웃
         self.grid_columnconfigure(0, weight=0)
         self.grid_columnconfigure(1, weight=1)
@@ -174,6 +169,14 @@ class App(ctk.CTk):
         )
         self.btn_start.pack(fill="x", padx=20, pady=(20, 12))
 
+        self.btn_pause = ctk.CTkButton(
+            action_frame, text="⏸ 일시정지", command=self.on_pause,
+            fg_color="#FF9500", hover_color="#E08600",
+            corner_radius=12, height=54, font=("SF Pro Text", 17, "bold"),
+        )
+        self.btn_pause.pack(fill="x", padx=20, pady=(0, 12))
+        self.btn_pause.configure(state="disabled")
+
         self.btn_stop = ctk.CTkButton(
             action_frame, text="작업 정지", command=self.on_stop,
             fg_color=IOS_COLORS["danger"], hover_color="#E6342A",
@@ -222,9 +225,6 @@ class App(ctk.CTk):
             corner_radius=10, border_width=0,
         )
         self.txt_log.grid(row=1, column=0, padx=20, pady=(0, 20), sticky="nsew")
-
-        # 독립 스크롤 대상 텍스트박스 등록
-        self._scrollable_textboxes = [self.txt_log, self.txt_msg]
 
         # ========== 오른쪽 패널 (브라우저 화면 영역) ==========
         self.right_panel = ctk.CTkFrame(
@@ -287,9 +287,7 @@ class App(ctk.CTk):
         if self.use_webview2_panel:
             self._init_webview2_panel()
 
-        # 마우스 휠: bind_all 대신 왼쪽 패널 위젯에만 직접 바인딩 (클릭 간섭 없음)
-        self.after(100, lambda: self._bind_scroll_recursive(self.left_panel))
-        self.after(140, lambda: self._bind_focus_recursive(self.left_panel))
+        self._apply_scroll_fixes()
 
         self.after(300, self._auto_open_login_page)
 
@@ -323,10 +321,13 @@ class App(ctk.CTk):
     # 스레드 안전 UI 업데이트
     # ------------------------------------------------------------------
     def _do_log(self, msg):
+        log_inner = getattr(self.txt_log, "_textbox", None)
+        _, bottom = log_inner.yview() if log_inner else (0.0, 1.0)
         self.txt_log.configure(state="normal")
         timestamp = time.strftime("%H:%M:%S")
         self.txt_log.insert("end", f"[{timestamp}] {msg}\n")
-        self.txt_log.see("end")
+        if bottom >= 0.95:
+            self.txt_log.see("end")
         self.txt_log.configure(state="disabled")
 
     def log_msg(self, msg):
@@ -535,6 +536,10 @@ class App(ctk.CTk):
 
     def _on_close(self):
         try:
+            self._save_to_config()
+        except Exception:
+            pass
+        try:
             if self._webview2_resize_job is not None:
                 self.after_cancel(self._webview2_resize_job)
                 self._webview2_resize_job = None
@@ -615,11 +620,62 @@ class App(ctk.CTk):
 
         self._webview2_resize_job = self.after_idle(_run)
 
-    def _bind_scroll_recursive(self, widget):
-        """위젯과 모든 자식에게 마우스 휠 바인딩 (bind_all 없이)."""
-        widget.bind("<MouseWheel>", self._on_mousewheel, add="+")
-        for child in widget.winfo_children():
-            self._bind_scroll_recursive(child)
+    def _apply_scroll_fixes(self):
+        canvas = self.scrollable_frame._parent_canvas
+        canvas.configure(yscrollincrement=20)
+        log_inner = getattr(self.txt_log, "_textbox", None)
+
+        def _units(event):
+            num = getattr(event, "num", None)
+            if num == 4:
+                return -3
+            if num == 5:
+                return 3
+            delta = int(getattr(event, "delta", 0) or 0)
+            if not delta:
+                return 0
+            if platform.system() == "Darwin":
+                u = int(round(-delta / 2.5)) or (-1 if delta > 0 else 1)
+            else:
+                lines = delta // 120 or (1 if delta > 0 else -1)
+                u = -lines * 3
+            return max(-30, min(30, u))
+
+        def _wheel(event):
+            units = _units(event)
+            if not units:
+                return "break"
+            target = self.winfo_containing(event.x_root, event.y_root)
+            if target is log_inner:
+                target.yview_scroll(units, "units")
+                return "break"
+            lp = self.left_panel
+            if (
+                lp.winfo_rootx() <= event.x_root < lp.winfo_rootx() + lp.winfo_width()
+                and lp.winfo_rooty() <= event.y_root < lp.winfo_rooty() + lp.winfo_height()
+            ):
+                canvas.yview_scroll(units, "units")
+            return "break"
+
+        sf = self.scrollable_frame
+        for w in (sf, getattr(sf, "_parent_canvas", None), getattr(sf, "_parent_frame", None), getattr(sf, "_scrollbar", None)):
+            if w is None:
+                continue
+            for seq in ("<Enter>", "<Leave>"):
+                try:
+                    w.unbind(seq)
+                except Exception:
+                    pass
+
+        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            try:
+                self.unbind_all(seq)
+            except Exception:
+                pass
+        self.bind_all("<MouseWheel>", _wheel)
+        self.bind_all("<Button-4>", _wheel)
+        self.bind_all("<Button-5>", _wheel)
+        self.after(100, lambda: self._bind_focus_recursive(self.left_panel))
 
     def _bind_focus_recursive(self, widget):
         """입력 위젯 클릭 시 포커스를 실제 입력 컨트롤로 보정."""
@@ -648,84 +704,6 @@ class App(ctk.CTk):
             self.after_idle(target.focus_set)
         except Exception:
             pass
-
-    def _on_mousewheel(self, event):
-        # 독립 스크롤 텍스트박스 위인지 확인
-        widget_path = str(event.widget)
-        for tb in self._scrollable_textboxes:
-            tb_path = str(tb)
-            if widget_path == tb_path or widget_path.startswith(tb_path + "."):
-                return self._scroll_textbox(tb, event)
-
-        # 메인 패널 스크롤
-        self._handle_panel_scroll(event)
-
-    def _scroll_textbox(self, textbox, event):
-        """텍스트박스를 독립적으로 스크롤. 끝에 도달하면 부모 패널로 전파."""
-        delta = event.delta if platform.system() == "Darwin" else event.delta / 120
-        scrolling_up = delta > 0
-
-        top, bottom = textbox._textbox.yview()
-
-        if (scrolling_up and top <= 0.0) or (not scrolling_up and bottom >= 1.0):
-            self._handle_panel_scroll(event)
-            return
-
-        units = -1 if scrolling_up else 1
-        textbox._textbox.yview_scroll(units * 2, "units")
-
-    def _handle_panel_scroll(self, event):
-        """왼쪽 패널 부드러운 스크롤."""
-        if platform.system() == "Darwin":
-            delta = event.delta
-        else:
-            delta = event.delta / 120 * 4 if getattr(event, "delta", 0) else 0
-
-        if delta == 0:
-            return
-
-        self._scroll_velocity += delta * -1.2
-
-        if not self._scroll_animating:
-            self._scroll_animating = True
-            self._animate_scroll()
-
-    def _animate_scroll(self):
-        if not self._scroll_animating:
-            return
-        try:
-            canvas = self.scrollable_frame._parent_canvas
-
-            if abs(self._scroll_velocity) < 0.5:
-                self._scroll_velocity = 0.0
-                self._scroll_animating = False
-                return
-
-            top, bottom = canvas.yview()
-            visible_fraction = bottom - top
-
-            if visible_fraction >= 1.0:
-                self._scroll_velocity = 0.0
-                self._scroll_animating = False
-                return
-
-            total_height = canvas.winfo_height() / visible_fraction
-            new_top = top + self._scroll_velocity / total_height
-            new_top = max(0.0, min(1.0 - visible_fraction, new_top))
-
-            canvas.yview_moveto(new_top)
-
-            if (new_top <= 0.0 and self._scroll_velocity < 0) or \
-               (new_top >= 1.0 - visible_fraction and self._scroll_velocity > 0):
-                self._scroll_velocity = 0.0
-                self._scroll_animating = False
-                return
-
-            self._scroll_velocity *= 0.82
-            self.after(16, self._animate_scroll)
-        except Exception:
-            self._scroll_velocity = 0.0
-            self._scroll_animating = False
 
     # ------------------------------------------------------------------
     # 버튼 액션
@@ -765,13 +743,26 @@ class App(ctk.CTk):
         if not neighbor_msg:
             neighbor_msg = self.config.get("neighbor_msg")
 
+        self.logic.is_paused = False
         self.btn_start.configure(state="disabled", text="시작 중...")
+        self.btn_pause.configure(state="normal", text="⏸ 일시정지")
         self.btn_stop.configure(state="normal")
         self.update_idletasks()
         self.log_msg(f"🚀 작업 시작: '{keyword}' (목표: {target_count}개)")
         threading.Thread(
             target=self._thread_start, args=(keyword, target_count, neighbor_msg), daemon=True
         ).start()
+
+    def on_pause(self):
+        if not self.logic.is_running:
+            return
+        self.logic.is_paused = not self.logic.is_paused
+        if self.logic.is_paused:
+            self.btn_pause.configure(text="▶ 계속하기")
+            self.log_msg("⏸ 작업 일시정지됨")
+        else:
+            self.btn_pause.configure(text="⏸ 일시정지")
+            self.log_msg("▶ 작업 재개")
 
     def _thread_start(self, keyword, target_count, neighbor_msg):
         self.logic.start_working(keyword, target_count, neighbor_msg)
@@ -783,16 +774,22 @@ class App(ctk.CTk):
                 self.btn_start.configure(state="normal", text="작업 시작 (준비중)")
             else:
                 self.btn_start.configure(state="normal", text="작업 시작")
+            self.logic.is_paused = False
+            self.btn_pause.configure(state="disabled", text="⏸ 일시정지")
             self.btn_stop.configure(state="disabled")
         else:
             self.btn_start.configure(state="disabled", text="작업 중...")
+            pause_text = "▶ 계속하기" if self.logic.is_paused else "⏸ 일시정지"
+            self.btn_pause.configure(state="normal", text=pause_text)
             self.btn_stop.configure(state="normal")
 
     def on_stop(self):
         if self.logic.is_running:
             self.logic.is_running = False
+            self.logic.is_paused = False
             self.log_msg("🛑 정지 요청됨...")
             self.btn_start.configure(state="normal", text="작업 시작")
+            self.btn_pause.configure(state="disabled", text="⏸ 일시정지")
             self.btn_stop.configure(state="disabled")
             self.update_idletasks()
         else:

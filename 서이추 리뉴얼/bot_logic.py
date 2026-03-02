@@ -36,6 +36,7 @@ class NaverBotLogic:
         self.config = config
         self.driver = None
         self.is_running = False
+        self.is_paused = False
         self.log = log_func
         self.update_progress = progress_func
         self.update_status = status_func
@@ -69,6 +70,10 @@ class NaverBotLogic:
     def safe_sleep(self, seconds):
         if seconds > 0:
             time.sleep(seconds)
+
+    def _wait_if_paused(self):
+        while self.is_paused and self.is_running:
+            time.sleep(0.5)
 
     def set_webview2_mode(self, enabled):
         self._webview2_mode = bool(enabled) and self._is_windows
@@ -388,10 +393,16 @@ class NaverBotLogic:
 
     def _process_neighbor_webview2(self, blog_id):
         try:
+            self._wait_if_paused()
+            if not self.is_running:
+                return False, "중단됨"
             src = self._get_page_source()
             if "이웃끊기" in src or "서로이웃 취소" in src:
                 return False, "스킵(이미 이웃)"
 
+            self._wait_if_paused()
+            if not self.is_running:
+                return False, "중단됨"
             clicked = self._cdp_eval(
                 """
                 try {
@@ -420,6 +431,9 @@ class NaverBotLogic:
 
             self.safe_sleep(0.35)
 
+            self._wait_if_paused()
+            if not self.is_running:
+                return False, "중단됨"
             src_after = self._get_page_source()
             if "하루에 신청 가능한 이웃수" in src_after and "초과" in src_after:
                 try:
@@ -462,6 +476,9 @@ class NaverBotLogic:
                     return False, "스킵(상대 5000명)"
                 return False, f"스킵({layer_popup[:20]})"
 
+            self._wait_if_paused()
+            if not self.is_running:
+                return False, "중단됨"
             current_url = self._get_current_url()
             if "BuddyAddForm" not in current_url:
                 if not self.safe_get(self.driver, f"https://m.blog.naver.com/BuddyAddForm.naver?blogId={blog_id}"):
@@ -518,6 +535,9 @@ class NaverBotLogic:
                 timeout=4.0,
             )
 
+            self._wait_if_paused()
+            if not self.is_running:
+                return False, "중단됨"
             clicked_confirm = self._cdp_eval(
                 """
                 var btn = Array.from(document.querySelectorAll("button,a,input[type='button'],input[type='submit']"))
@@ -1244,6 +1264,9 @@ class NaverBotLogic:
             scroll_attempts = 0
             max_scroll = 7
             while len(queue) < 20 and scroll_attempts < max_scroll:
+                self._wait_if_paused()
+                if not self.is_running:
+                    break
                 try:
                     self._cdp_eval("window.scrollTo(0, document.body.scrollHeight); return true;", timeout=4.0)
                 except Exception:
@@ -1291,6 +1314,9 @@ class NaverBotLogic:
         max_scroll = 7
 
         while len(queue) < 20 and scroll_attempts < max_scroll:
+            self._wait_if_paused()
+            if not self.is_running:
+                break
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             self.safe_sleep(1.0)
 
@@ -1334,10 +1360,16 @@ class NaverBotLogic:
 
         driver = self.driver
         try:
+            self._wait_if_paused()
+            if not self.is_running:
+                return False, "중단됨"
             src = driver.page_source
             if "이웃끊기" in src or "서로이웃 취소" in src:
                 return False, "스킵(이미 이웃)"
 
+            self._wait_if_paused()
+            if not self.is_running:
+                return False, "중단됨"
             clicked = False
             try:
                 btn = driver.find_element(By.CSS_SELECTOR, "[data-click-area='ebc.add']")
@@ -1358,6 +1390,9 @@ class NaverBotLogic:
 
             self.safe_sleep(0.3)
 
+            self._wait_if_paused()
+            if not self.is_running:
+                return False, "중단됨"
             src_after = driver.page_source
             if "하루에 신청 가능한 이웃수" in src_after and "초과" in src_after:
                 try:
@@ -1401,6 +1436,9 @@ class NaverBotLogic:
                     return False, "스킵(상대 5000명)"
                 return False, f"스킵({layer_popup[:20]})"
 
+            self._wait_if_paused()
+            if not self.is_running:
+                return False, "중단됨"
             current_url = driver.current_url
             if "BuddyAddForm" not in current_url:
                 if not self.safe_get(driver, f"https://m.blog.naver.com/BuddyAddForm.naver?blogId={blog_id}"):
@@ -1459,6 +1497,9 @@ class NaverBotLogic:
             except (NoSuchElementException, StaleElementReferenceException):
                 return False, "실패(확인 버튼 없음)"
 
+            self._wait_if_paused()
+            if not self.is_running:
+                return False, "중단됨"
             final_popup = driver.execute_script("""
                 var layer = document.getElementById('_alertLayer');
                 if (layer && layer.style.display !== 'none') {
@@ -1513,7 +1554,13 @@ class NaverBotLogic:
         consecutive_errors = 0
 
         while self.is_running and self.current_count < self.target_count:
+            self._wait_if_paused()
+            if not self.is_running:
+                break
             if not queue:
+                self._wait_if_paused()
+                if not self.is_running:
+                    break
                 self.log(f"🔄 ID 수집 중... (처리 완료: {len(processed_ids)}명)")
                 if not self.safe_get(self.driver, search_url):
                     self.log("❌ 검색 페이지 재진입 실패")
@@ -1536,6 +1583,9 @@ class NaverBotLogic:
 
             self.log(f"\n▶️ [{self.current_count+1}/{self.target_count}] '{blog_id}' 작업 시작")
 
+            self._wait_if_paused()
+            if not self.is_running:
+                break
             if not self.safe_get(self.driver, f"https://m.blog.naver.com/{blog_id}"):
                 self.log("   ❌ 페이지 로드 실패")
                 consecutive_errors += 1
@@ -1554,6 +1604,9 @@ class NaverBotLogic:
                 self.log("   ❌ 접근 불가 블로그 (Skip)")
                 continue
 
+            self._wait_if_paused()
+            if not self.is_running:
+                break
             is_friend, msg_friend = self.process_neighbor(blog_id)
 
             if is_friend == "DONE_DAY_LIMIT":
@@ -1566,6 +1619,9 @@ class NaverBotLogic:
             self.log(f"   └ 서이추: {msg_friend}")
 
             if "BuddyAddForm" in self._get_current_url():
+                self._wait_if_paused()
+                if not self.is_running:
+                    break
                 self.safe_get(self.driver, f"https://m.blog.naver.com/{blog_id}")
                 self.safe_sleep(self.normal_wait)
 
@@ -1594,6 +1650,7 @@ class NaverBotLogic:
             self._ensure_my_blog_id()
         self.target_count = target_count
         self.is_running = True
+        self.is_paused = False
         self.current_count = 0
 
         self.log("🚀 작업 시작")
@@ -1620,7 +1677,13 @@ class NaverBotLogic:
         consecutive_errors = 0
 
         while self.is_running and self.current_count < self.target_count:
+            self._wait_if_paused()
+            if not self.is_running:
+                break
             if not queue:
+                self._wait_if_paused()
+                if not self.is_running:
+                    break
                 self.log(f"🔄 ID 수집 중... (처리 완료: {len(processed_ids)}명)")
 
                 try:
@@ -1649,6 +1712,9 @@ class NaverBotLogic:
             self.log(f"\n▶️ [{self.current_count+1}/{self.target_count}] '{blog_id}' 작업 시작")
 
             try:
+                self._wait_if_paused()
+                if not self.is_running:
+                    break
                 self.driver.switch_to.new_window("tab")
                 if not self.safe_get(self.driver, f"https://m.blog.naver.com/{blog_id}"):
                     self.log("   ❌ 페이지 로드 실패")
@@ -1675,6 +1741,10 @@ class NaverBotLogic:
                 self._close_tab_and_return(main_window)
                 continue
 
+            self._wait_if_paused()
+            if not self.is_running:
+                self._close_tab_and_return(main_window)
+                break
             is_friend, msg_friend = self.process_neighbor(blog_id)
 
             if is_friend == "DONE_DAY_LIMIT":
@@ -1690,6 +1760,10 @@ class NaverBotLogic:
             self.log(f"   └ 서이추: {msg_friend}")
 
             if "BuddyAddForm" in self.driver.current_url:
+                self._wait_if_paused()
+                if not self.is_running:
+                    self._close_tab_and_return(main_window)
+                    break
                 self.safe_get(self.driver, f"https://m.blog.naver.com/{blog_id}")
                 self.safe_sleep(self.normal_wait)
 
@@ -1704,5 +1778,6 @@ class NaverBotLogic:
             self.safe_sleep(wait_time)
 
         self.is_running = False
+        self.is_paused = False
         self.log("🏁 작업 종료")
         self.update_status("작업 완료", "green")
